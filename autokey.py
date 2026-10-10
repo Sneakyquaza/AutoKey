@@ -674,6 +674,7 @@ class KeyCapture(QPushButton):
         self.hub, self.combo, self.specs = hub, combo, list(specs)
         self.setObjectName(obj)
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)  # Espace/Entrée ne doivent pas re-cliquer le bouton
         self.setProperty("recording", False)
         self.setToolTip(tr("click_change"))
         self.clicked.connect(lambda: self.hub.begin_record(self))
@@ -1111,7 +1112,10 @@ class MainWindow(QWidget):
         c1.setFixedWidth(180)
         cap = KeyCapture(self, [st["key"]], obj="capBig")
         cap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        cap.captured.connect(lambda s: (st.__setitem__("key", s[0]), self.dirty()))
+        def on_key(specs):
+            st["key"] = specs[0]
+            self.dirty()
+        cap.captured.connect(on_key)
         l1.addWidget(cap, 1)
         hint = label(tr("click_change"), "muted")
         hint.setAlignment(Qt.AlignCenter)
@@ -1166,7 +1170,7 @@ class MainWindow(QWidget):
         cap = KeyCapture(self, st["hotkey"], combo=True, obj="cap")
         cap.setMinimumHeight(64)
 
-        def on_cap(specs, which=which):
+        def on_cap(specs):
             st["hotkey"] = specs
             self.bind_active[which] = False
             (self.start_spam if which == "spam" else self.start_pat).hint.setText(combo_label(specs))
@@ -1176,7 +1180,7 @@ class MainWindow(QWidget):
         seg = Segmented([("toggle", tr("toggle")), ("hold", tr("hold"))], st["hk_mode"], expand=True)
         hint = label(tr("hk_" + st["hk_mode"] + "_hint"), "muted", wrap=True)
 
-        def on_mode(m, which=which, hint=hint):
+        def on_mode(m):
             st["hk_mode"] = m
             hint.setText(tr("hk_" + m + "_hint"))
             self.dirty()
