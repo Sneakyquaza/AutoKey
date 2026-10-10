@@ -10,10 +10,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install pynput pyinstaller
+      - run: python -m pip install pynput pyside6 pyinstaller
+      - run: python autokey.py --make-icon app.ico
+        env:
+          QT_QPA_PLATFORM: offscreen
       - run: >
-          python -m PyInstaller --onefile --windowed --name AutoKey
+          python -m PyInstaller --onefile --windowed --name AutoKey --icon app.ico
           --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
+          --exclude-module PySide6.QtNetwork --exclude-module PySide6.QtQml
+          --exclude-module PySide6.QtQuick --exclude-module PySide6.QtPdf
           autokey.py
       - uses: actions/upload-artifact@v4
         with:
