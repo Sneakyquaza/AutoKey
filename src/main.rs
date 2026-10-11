@@ -18,9 +18,8 @@ fn main() -> eframe::Result<()> {
     let pin = settings.pin;
 
     let shared = control::Shared::new(settings, platform::keyboard());
-    let (tx, rx) = std::sync::mpsc::channel();
-    platform::start_hook(tx);
-    control::spawn_controller(shared.clone(), rx);
+    platform::start_test_input();
+    control::spawn_poller(shared.clone());
 
     let icon = egui::IconData { rgba: include_bytes!("../assets/icon64.rgba").to_vec(), width: 64, height: 64 };
     let mut vp = egui::ViewportBuilder::default()

@@ -5,7 +5,6 @@ use crate::engine::{CStep, Job, Keyboard, Runner};
 use crate::keys::{combo_sort, KeySpec, RawKey};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering::*};
-use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -241,10 +240,40 @@ impl Shared {
     }
 }
 
-pub fn spawn_controller(shared: Arc<Shared>, rx: Receiver<RawKey>) {
+/// Lecture globale du clavier : on interroge l'état des touches toutes les ~8 ms.
+/// Hors enregistrement, seules les touches des raccourcis sont surveillées (coût CPU quasi nul).
+pub fn spawn_poller(shared: Arc<Shared>) {
     std::thread::spawn(move || {
-        for ev in rx {
-            shared.handle(ev);
+        let mut prev = [false; 256];
+        loop {
+            let recording = shared.rec.lock().unwrap().is_some();
+            let mut watch = [false; 256];
+            if recording {
+                for vk in 0x08..=0xFEusize {
+                    // ni souris (0x01-0x07), ni modificateurs génériques (on garde gauche/droite)
+                    if !matches!(vk, 0x10 | 0x11 | 0x12) {
+                        watch[vk] = true;
+                    }
+                }
+            } else {
+                let s = shared.settings.lock().unwrap();
+                for k in s.spam.hotkey.iter().chain(s.pattern.hotkey.iter()) {
+                    watch[(k.vk & 0xFF) as usize] = true;
+                }
+            }
+            for vk in 0..256usize {
+                if !watch[vk] {
+                    prev[vk] = false;
+                    continue;
+                }
+                let d = crate::platform::key_down(vk as u16);
+                if d != prev[vk] {
+                    prev[vk] = d;
+                    let key = if d { crate::platform::key_spec(vk as u16) } else { KeySpec::vk(vk as u16) };
+                    shared.handle(RawKey { key, down: d });
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
         }
     });
 }
