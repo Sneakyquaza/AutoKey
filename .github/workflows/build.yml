@@ -7,20 +7,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: python -m pip install pynput pyside6 pyinstaller
-      - run: python autokey.py --make-icon app.ico
-        env:
-          QT_QPA_PLATFORM: offscreen
-      - run: >
-          python -m PyInstaller --onefile --windowed --name AutoKey --icon app.ico
-          --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
-          --exclude-module PySide6.QtNetwork --exclude-module PySide6.QtQml
-          --exclude-module PySide6.QtQuick --exclude-module PySide6.QtPdf
-          autokey.py
+      - run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --release --locked
+      - name: Build
+        run: cargo build --release --locked
+      - run: Copy-Item target\release\autokey.exe AutoKey.exe
       - uses: actions/upload-artifact@v4
         with:
           name: AutoKey
-          path: dist/AutoKey.exe
+          path: AutoKey.exe
