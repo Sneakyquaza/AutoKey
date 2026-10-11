@@ -74,9 +74,13 @@ mod win {
         }
     }
 
-    pub fn key_down(vk: u16) -> bool {
-        let s = unsafe { GetAsyncKeyState(vk as i32) };
-        (s as u16 & 0x8000) != 0 && !recently_injected(vk)
+    /// (enfoncée maintenant, appuyée-relâchée depuis la dernière lecture)
+    pub fn key_poll(vk: u16) -> (bool, bool) {
+        let s = unsafe { GetAsyncKeyState(vk as i32) } as u16;
+        if recently_injected(vk) {
+            return (false, false);
+        }
+        ((s & 0x8000) != 0, (s & 1) != 0)
     }
 
     pub fn key_spec(vk: u16) -> KeySpec {
@@ -92,29 +96,30 @@ mod win {
         }
     }
 
-    pub fn init() {
+    /// Timer système à 1 ms, uniquement pendant qu'une tâche tourne (économie d'énergie sinon)
+    pub fn hires(on: bool) {
         unsafe {
-            // timer système à 1 ms : intervalles courts précis
-            windows_sys::Win32::Media::timeBeginPeriod(1);
+            if on {
+                windows_sys::Win32::Media::timeBeginPeriod(1);
+            } else {
+                windows_sys::Win32::Media::timeEndPeriod(1);
+            }
+        }
+    }
+
+    /// Rend au système la mémoire qui n'a servi qu'à l'initialisation
+    pub fn trim_memory() {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
+        unsafe {
+            SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
         }
     }
 
     /// Coins arrondis + ombre natifs (Windows 11) pour la fenêtre sans bordure
-    pub fn round_corners(title: &str) {
+    pub fn round_corners(hwnd: isize) {
         use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
-        use windows_sys::Win32::System::Threading::GetCurrentProcessId;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
-        let wide: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+        let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
         unsafe {
-            let hwnd = FindWindowW(std::ptr::null(), wide.as_ptr());
-            if hwnd.is_null() {
-                return;
-            }
-            let mut pid = 0u32;
-            GetWindowThreadProcessId(hwnd, &mut pid);
-            if pid != GetCurrentProcessId() {
-                return;
-            }
             let pref: i32 = DWMWCP_ROUND;
             DwmSetWindowAttribute(
                 hwnd,
@@ -152,12 +157,13 @@ pub fn keyboard() -> Arc<dyn Keyboard> {
     return Arc::new(NullKeyboard);
 }
 
-/// État physique actuel d'une touche (hors frappes envoyées par AutoKey)
-pub fn key_down(_vk: u16) -> bool {
+/// État physique d'une touche (hors frappes envoyées par AutoKey) :
+/// (enfoncée maintenant, appui très bref survenu entre deux lectures)
+pub fn key_poll(_vk: u16) -> (bool, bool) {
     #[cfg(windows)]
-    return win::key_down(_vk);
+    return win::key_poll(_vk);
     #[cfg(not(windows))]
-    return FAKE[(_vk & 0xFF) as usize].load(Relaxed) && !recently_injected(_vk);
+    return (FAKE[(_vk & 0xFF) as usize].load(Relaxed) && !recently_injected(_vk), false);
 }
 
 pub fn key_spec(vk: u16) -> KeySpec {
@@ -185,13 +191,48 @@ pub fn start_test_input() {
 
 pub fn init() {
     T0.get_or_init(Instant::now);
-    #[cfg(windows)]
-    win::init();
 }
 
-pub fn round_corners(_title: &str) {
+static HIRES: std::sync::Mutex<u32> = std::sync::Mutex::new(0);
+
+/// Active/désactive le timer 1 ms (compteur de références)
+pub fn hires(on: bool) {
+    let mut n = HIRES.lock().unwrap();
+    if on {
+        *n += 1;
+        #[cfg(windows)]
+        if *n == 1 {
+            win::hires(true);
+        }
+    } else if *n > 0 {
+        *n -= 1;
+        #[cfg(windows)]
+        if *n == 0 {
+            win::hires(false);
+        }
+    }
+}
+
+pub fn trim_memory() {
     #[cfg(windows)]
-    win::round_corners(_title);
+    win::trim_memory();
+}
+
+/// Appelé une fois la fenêtre affichée : coins arrondis (Win 11) puis libération de la mémoire d'init
+pub fn after_window_shown(_w: &winit::window::Window) {
+    #[cfg(any(windows, feature = "wincheck"))]
+    {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(h) = _w.window_handle() {
+            if let RawWindowHandle::Win32(h) = h.as_raw() {
+                win::round_corners(h.hwnd.get());
+            }
+        }
+    }
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        trim_memory();
+    });
 }
 
 // garde le code Windows « utilisé » quand on le vérifie depuis Linux
@@ -199,8 +240,24 @@ pub fn round_corners(_title: &str) {
 pub fn _wincheck() {
     let kb: Arc<dyn Keyboard> = Arc::new(win::WinKeyboard);
     kb.down(&KeySpec::vk(0x41));
-    let _ = win::key_down(0x41);
+    let _ = win::key_poll(0x41);
     let _ = win::key_spec(0x41);
-    win::init();
-    win::round_corners("AutoKey");
+    win::hires(true);
+    win::trim_memory();
+    win::round_corners(0);
+}
+
+/// Boîtes de dialogue natives (Windows). Ailleurs : aucune.
+pub fn pick_save() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    return rfd::FileDialog::new().add_filter("AutoKey", &["json"]).set_file_name("pattern.json").save_file();
+    #[cfg(not(windows))]
+    return None;
+}
+
+pub fn pick_open() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    return rfd::FileDialog::new().add_filter("AutoKey", &["json"]).pick_file();
+    #[cfg(not(windows))]
+    return None;
 }

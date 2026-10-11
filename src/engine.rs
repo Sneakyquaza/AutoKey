@@ -108,7 +108,9 @@ impl Runner {
         let stop = Arc::new(Stop::new());
         let (kb, status, stop2) = (self.kb.clone(), self.status.clone(), stop.clone());
         let h = std::thread::spawn(move || {
+            crate::platform::hires(true);
             run_job(&*kb, &status, &stop2, job);
+            crate::platform::hires(false);
             status.step.store(-1, SeqCst);
             status.running.store(false, SeqCst);
         });

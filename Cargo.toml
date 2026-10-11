@@ -1,13 +1,19 @@
 [package]
 name = "autokey"
-version = "3.0.1"
+version = "3.1.0"
 edition = "2021"
 
 [dependencies]
-eframe = { version = "=0.29.1", default-features = false, features = ["glow", "default_fonts", "x11"] }
+# Interface : egui + fenêtre winit + rendu logiciel (pas d'OpenGL → beaucoup moins de RAM)
+egui = { version = "=0.29.1", default-features = false }
+egui-winit = { version = "=0.29.1", default-features = false }
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11"] }
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rfd = "0.15"
+# Mise à jour : HTTPS (rustls, 100 % Rust) + vérification SHA-256
+ureq = { version = "2.12", default-features = false, features = ["tls", "proxy-from-env"] }
+sha2 = "0.10"
 # Compile aussi hors Windows (déclarations seules) : permet de vérifier le code Windows depuis Linux
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
@@ -19,6 +25,10 @@ windows-sys = { version = "0.59", features = [
   "Win32_Graphics_Dwm",
 ] }
 
+[target.'cfg(windows)'.dependencies]
+# boîtes de dialogue Ouvrir / Enregistrer natives
+rfd = { version = "0.15", default-features = false }
+
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
@@ -28,7 +38,7 @@ wincheck = []
 shots = []
 
 [profile.release]
-opt-level = "s"
+opt-level = 3
 lto = true
 codegen-units = 1
 strip = true

@@ -119,6 +119,13 @@ static T: &[(&str, [&str; 3])] = &[
             "Os atalhos funcionam mesmo com a janela em segundo plano",
         ],
     ),
+    ("update", ["Mettre à jour", "Update", "Atualizar"]),
+    ("update_tip", ["Nouvelle version disponible (build {b}) — clique pour l'installer", "New version available (build {b}) — click to install", "Nova versão disponível (build {b}) — clique para instalar"]),
+    ("up_dl", ["Téléchargement de la mise à jour… {p} %", "Downloading update… {p}%", "Baixando atualização… {p}%"]),
+    ("up_restart", ["Mise à jour installée, redémarrage…", "Update installed, restarting…", "Atualização instalada, reiniciando…"]),
+    ("up_net", ["Mise à jour impossible : connexion échouée", "Update failed: connection error", "Falha na atualização: erro de conexão"]),
+    ("up_bad", ["Mise à jour refusée : fichier non vérifié", "Update rejected: file failed verification", "Atualização recusada: arquivo não verificado"]),
+    ("up_io", ["Mise à jour impossible : dossier protégé en écriture", "Update failed: folder is write-protected", "Falha na atualização: pasta protegida"]),
     // noms de touches
     ("Space", ["Espace", "Space", "Espaço"]),
     ("Enter", ["Entrée", "Enter", "Enter"]),

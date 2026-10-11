@@ -34,7 +34,7 @@ pub struct Shared {
     pub dirty: AtomicBool,
     pub runner: Runner,
     pub flash: Mutex<Option<(&'static str, std::time::Instant)>>,
-    ctx: OnceLock<eframe::egui::Context>,
+    ctx: OnceLock<egui::Context>,
     pressed: Mutex<HashSet<u16>>,
     active: Mutex<[bool; 2]>,
 }
@@ -53,7 +53,7 @@ impl Shared {
         })
     }
 
-    pub fn set_ctx(&self, ctx: eframe::egui::Context) {
+    pub fn set_ctx(&self, ctx: egui::Context) {
         let _ = self.ctx.set(ctx);
     }
 
@@ -245,6 +245,7 @@ impl Shared {
 pub fn spawn_poller(shared: Arc<Shared>) {
     std::thread::spawn(move || {
         let mut prev = [false; 256];
+        let mut was_watched = [false; 256];
         loop {
             let recording = shared.rec.lock().unwrap().is_some();
             let mut watch = [false; 256];
@@ -264,16 +265,28 @@ pub fn spawn_poller(shared: Arc<Shared>) {
             for vk in 0..256usize {
                 if !watch[vk] {
                     prev[vk] = false;
+                    was_watched[vk] = false;
                     continue;
                 }
-                let d = crate::platform::key_down(vk as u16);
+                let (d, tapped) = crate::platform::key_poll(vk as u16);
+                if !was_watched[vk] {
+                    // première lecture : on prend l'état actuel sans rien déclencher (ignore l'historique)
+                    was_watched[vk] = true;
+                    prev[vk] = d;
+                    continue;
+                }
                 if d != prev[vk] {
                     prev[vk] = d;
                     let key = if d { crate::platform::key_spec(vk as u16) } else { KeySpec::vk(vk as u16) };
                     shared.handle(RawKey { key, down: d });
+                } else if !d && tapped {
+                    // appui plus court que l'intervalle de lecture : on le rejoue
+                    shared.handle(RawKey { key: crate::platform::key_spec(vk as u16), down: true });
+                    shared.handle(RawKey { key: KeySpec::vk(vk as u16), down: false });
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            // 10 ms pendant la capture, 15 ms sinon (un appui humain dure > 30 ms)
+            std::thread::sleep(std::time::Duration::from_millis(if recording { 10 } else { 15 }));
         }
     });
 }

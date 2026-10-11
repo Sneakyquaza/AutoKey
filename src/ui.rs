@@ -3,7 +3,7 @@ use crate::config::{self, HkMode, Mode, PatternFile, Settings, Step, Unit};
 use crate::control::{Recording, Shared, Target};
 use crate::i18n::{fmt_duration, fmt_num, tr, trf, Lang};
 use crate::keys::combo_label;
-use eframe::egui::{
+use egui::{
     self, epaint, pos2, vec2, Align, Align2, Color32, CursorIcon, FontFamily, FontId, Id, Painter, Pos2, Rect, Response,
     Sense, Shape, Stroke, TextEdit, Ui, Vec2, ViewportCommand,
 };
@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 const fn rgb(h: u32) -> Color32 {
     Color32::from_rgb((h >> 16) as u8, (h >> 8) as u8, h as u8)
 }
-const BG: Color32 = rgb(0x0B0D12);
+pub const BG: Color32 = rgb(0x0B0D12);
 const SURFACE: Color32 = rgb(0x12151C);
 const SURFACE2: Color32 = rgb(0x181C25);
 const CARD_LINE: Color32 = rgb(0x1F2431);
@@ -67,26 +67,45 @@ fn font(size: f32, w: W) -> FontId {
 }
 
 pub fn setup_fonts(ctx: &egui::Context) {
-    let mut defs = egui::FontDefinitions::default();
-    let fallback = defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    // Polices système (rien d'embarqué → exe plus léger). Chaque graisse a des solutions de repli.
+    let mut defs = egui::FontDefinitions::empty();
     #[cfg(windows)]
     let dir = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts\\")).unwrap_or_else(|_| "C:\\Windows\\Fonts\\".into());
     #[cfg(windows)]
-    let files = [("ui-r", "segoeui.ttf"), ("ui-s", "seguisb.ttf"), ("ui-b", "segoeuib.ttf")];
+    let files: [&[&str]; 3] = [&["segoeui.ttf", "arial.ttf", "tahoma.ttf"], &["seguisb.ttf", "segoeuib.ttf", "arialbd.ttf"], &["segoeuib.ttf", "arialbd.ttf", "tahomabd.ttf"]];
     #[cfg(not(windows))]
     let dir = "/usr/share/fonts/opentype/inter/".to_string();
     #[cfg(not(windows))]
-    let files = [("ui-r", "Inter-Regular.otf"), ("ui-s", "Inter-SemiBold.otf"), ("ui-b", "Inter-Bold.otf")];
+    let files: [&[&str]; 3] = [&["Inter-Regular.otf"], &["Inter-SemiBold.otf"], &["Inter-Bold.otf"]];
 
     let fams = [FontFamily::Proportional, FontFamily::Name("semi".into()), FontFamily::Name("bold".into())];
-    for ((name, file), fam) in files.iter().zip(fams.iter()) {
-        let mut list = fallback.clone();
-        if let Ok(bytes) = std::fs::read(format!("{dir}{file}")) {
-            defs.font_data.insert(name.to_string(), egui::FontData::from_owned(bytes));
-            list.insert(0, name.to_string());
+    let mut loaded: Vec<String> = vec![];
+    for (cands, fam) in files.iter().zip(fams.iter()) {
+        let mut list: Vec<String> = vec![];
+        for file in cands.iter() {
+            if !loaded.iter().any(|l| l == file) {
+                if let Ok(bytes) = std::fs::read(format!("{dir}{file}")) {
+                    defs.font_data.insert(file.to_string(), egui::FontData::from_owned(bytes));
+                    loaded.push(file.to_string());
+                }
+            }
+            if loaded.iter().any(|l| l == file) {
+                list.push(file.to_string());
+                break;
+            }
         }
         defs.families.insert(fam.clone(), list);
     }
+    // repli croisé : si une graisse manque, on prend n'importe quelle police chargée
+    for fam in &fams {
+        let l = defs.families.entry(fam.clone()).or_default();
+        for f in &loaded {
+            if !l.contains(f) {
+                l.push(f.clone());
+            }
+        }
+    }
+    defs.families.insert(FontFamily::Monospace, loaded.clone());
     ctx.set_fonts(defs);
 
     let mut v = egui::Visuals::dark();
@@ -448,9 +467,7 @@ fn keycap(ui: &mut Ui, r: Rect, id: Id, label: &str, recording: bool, size: CapS
     let face = Rect::from_min_max(r.min, pos2(r.max.x, r.max.y - depth));
     grad_rect(p, face, rad, rgb(0x1F2433), rgb(0x161A23), false);
     if recording {
-        let t = ui.input(|i| i.time) as f32;
-        let a = 0.5 + 0.5 * (t * 5.0).sin();
-        p.rect_stroke(face.expand(3.0), rad + 3.0, sk(3.0, CYAN.gamma_multiply(0.15 + 0.25 * a)));
+        p.rect_stroke(face.expand(3.0), rad + 3.0, sk(3.0, CYAN.gamma_multiply(0.3)));
         p.rect_stroke(face, rad, sk(2.0, CYAN));
         let msg = if combo { tr(lang, "press_combo") } else { tr(lang, "press_key") };
         let shown = if label.is_empty() { msg.to_string() } else { label.to_string() };
@@ -467,11 +484,11 @@ fn keycap(ui: &mut Ui, r: Rect, id: Id, label: &str, recording: bool, size: CapS
     } else {
         let border = lerp_c(LINE2, VIOLET, hov);
         p.rect_stroke(face, rad, sk(1.0, border));
-        let mut fsz = fs;
+        // une seule mesure, puis taille choisie parmi quelques paliers (atlas de police plus petit)
         let maxw = face.width() - 20.0;
-        while fsz > 11.0 && text_width(p, label, fsz, W::B) > maxw {
-            fsz -= 1.0;
-        }
+        let w0 = text_width(p, label, fs, W::B).max(1.0);
+        let ideal = fs * (maxw / w0).min(1.0);
+        let fsz = [46.0, 34.0, 26.0, 22.0, 17.0, 15.0, 13.0, 11.0].into_iter().find(|s| *s <= ideal).unwrap_or(11.0);
         text(p, face.center(), Align2::CENTER_CENTER, label, fsz, W::B, TEXT);
     }
     resp
@@ -647,6 +664,7 @@ enum Act {
 
 pub struct App {
     sh: Arc<Shared>,
+    up: Arc<crate::update::Updater>,
     lang_open: bool,
     confirm_clear: bool,
     last_active: i32,
@@ -657,9 +675,10 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(sh: Arc<Shared>) -> Self {
+    pub fn new(sh: Arc<Shared>, up: Arc<crate::update::Updater>) -> Self {
         App {
             sh,
+            up,
             lang_open: false,
             confirm_clear: false,
             last_active: -1,
@@ -676,8 +695,13 @@ impl App {
     }
 
     #[cfg(feature = "shots")]
-    pub fn open_confirm_for_shots(&mut self) {
-        self.confirm_clear = true;
+    pub fn updater(&self) -> &Arc<crate::update::Updater> {
+        &self.up
+    }
+
+    #[cfg(feature = "shots")]
+    pub fn open_confirm_for_shots(&mut self, on: bool) {
+        self.confirm_clear = on;
     }
 
     fn apply(&mut self, ctx: &egui::Context, a: Act) {
@@ -712,9 +736,9 @@ impl App {
             }
             Act::SavePreset => {
                 let pat = self.sh.settings.lock().unwrap().pattern.clone();
-                if let Some(path) =
-                    rfd::FileDialog::new().add_filter("AutoKey", &["json"]).set_file_name("pattern.json").save_file()
-                {
+                let picked = crate::platform::pick_save();
+                crate::platform::trim_memory(); // la boîte de dialogue Windows charge beaucoup de DLL
+                if let Some(path) = picked {
                     let file = PatternFile { autokey: 3, pattern: pat };
                     if let Ok(txt) = serde_json::to_string_pretty(&file) {
                         if std::fs::write(path, txt).is_ok() {
@@ -724,8 +748,10 @@ impl App {
                 }
             }
             Act::OpenPreset => {
-                if let Some(path) = rfd::FileDialog::new().add_filter("AutoKey", &["json"]).pick_file() {
-                    let parsed = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<PatternFile>(&t).ok());
+                let picked = crate::platform::pick_open();
+                crate::platform::trim_memory();
+                if let Some(path) = picked {
+                    let parsed = config::read_pattern_file(&path);
                     match parsed {
                         Some(f) => {
                             self.sh.runner.stop();
@@ -741,16 +767,13 @@ impl App {
     }
 }
 
-impl eframe::App for App {
-    fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
-        BG.to_normalized_gamma_f32()
+impl App {
+    pub fn wants_quit(&self) -> bool {
+        self.up.quit.load(SeqCst)
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    pub fn update(&mut self, ctx: &egui::Context) {
         self.frames += 1;
-        if self.frames == 2 {
-            crate::platform::round_corners("AutoKey");
-        }
         let rec = self.sh.recording();
         if rec.is_some() {
             // pendant l'écoute, le clavier ne doit rien activer dans la fenêtre
@@ -780,17 +803,18 @@ impl eframe::App for App {
                 ctx.request_repaint_after(Duration::from_millis(450));
             }
         }
-        if self.sh.runner.running() || rec.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(50));
+        // rafraîchissement minimal : 4 i/s pendant l'exécution (compteur, étape en cours), rien au repos
+        if self.sh.runner.running() {
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
         if self.sh.flash.lock().unwrap().is_some() {
-            ctx.request_repaint_after(Duration::from_millis(250));
+            ctx.request_repaint_after(Duration::from_millis(3050));
         }
         #[cfg(feature = "shots")]
         crate::shots::tick(self, ctx);
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    pub fn on_exit(&mut self) {
         self.sh.runner.stop();
         self.sh.save_now();
     }
@@ -877,6 +901,23 @@ impl App {
         if resp.clicked() {
             self.lang_open = !self.lang_open;
         }
+
+        // bouton de mise à jour (visible seulement si une nouvelle version existe)
+        if let crate::update::UpState::Available { build, .. } = self.up.state() {
+            let label = tr(lang, "update");
+            let uw = text_width(ui.painter(), label, 13.0, W::S) + 44.0;
+            let ur = Rect::from_min_size(pos2(lr.min.x - 10.0 - uw, bar.center().y - 16.0), vec2(uw, 32.0));
+            let resp = hand(ui.interact(ur, Id::new("updbtn"), Sense::click()))
+                .on_hover_text(trf(lang, "update_tip", &[("b", build.to_string())]));
+            let p = ui.painter();
+            let h = if resp.hovered() { 0.12 } else { 0.0 };
+            grad_rect(p, ur, 9.0, lighten(VIOLET, h), lighten(CYAN, h), true);
+            icon(p, Ic::Save, pos2(ur.min.x + 18.0, ur.center().y), 16.0, Color32::WHITE);
+            text(p, pos2(ur.min.x + 32.0, ur.center().y), Align2::LEFT_CENTER, label, 13.0, W::S, Color32::WHITE);
+            if resp.clicked() {
+                self.up.install();
+            }
+        }
     }
 
     fn lang_popup(&mut self, ui: &mut Ui, full: Rect, s: &mut Settings, acts: &mut Vec<Act>) {
@@ -950,9 +991,7 @@ impl App {
         let running = self.sh.runner.running();
         let c = pos2(r.min.x + 26.0, r.center().y);
         if running {
-            let t = ui.input(|i| i.time) as f32;
-            let a = 0.5 + 0.5 * (t * 4.0).sin();
-            p.circle_filled(c, 7.0, GREEN.gamma_multiply(0.15 + 0.3 * a));
+            p.circle_filled(c, 7.0, GREEN.gamma_multiply(0.3));
             p.circle_filled(c, 3.5, GREEN);
         } else {
             p.circle_filled(c, 3.5, MUTED);
@@ -987,6 +1026,21 @@ impl App {
             }
         }
         drop(flash);
+        match self.up.state() {
+            crate::update::UpState::Downloading(pc) => {
+                msg = trf(lang, "up_dl", &[("p", pc.to_string())]);
+                col = CYAN;
+            }
+            crate::update::UpState::Restarting => {
+                msg = tr(lang, "up_restart").to_string();
+                col = GREEN;
+            }
+            crate::update::UpState::Failed(k) => {
+                msg = tr(lang, k).to_string();
+                col = AMBER;
+            }
+            _ => {}
+        }
         text(p, pos2(r.min.x + 40.0, r.center().y), Align2::LEFT_CENTER, &msg, 12.0, W::S, col);
         text(p, pos2(r.max.x - 20.0, r.center().y), Align2::RIGHT_CENTER, tr(lang, "bg_hint"), 12.0, W::R, MUTED);
     }

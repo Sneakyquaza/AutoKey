@@ -154,8 +154,58 @@ fn config_path() -> PathBuf {
     base.join("AutoKey").join("config3.json")
 }
 
+const MAX_FILE: u64 = 1024 * 1024;
+const MAX_STEPS: usize = 500;
+
+/// Lecture bornée : fichier ≤ 1 Mo, sinon ignoré
+fn read_small(p: &std::path::Path) -> Option<String> {
+    let meta = std::fs::metadata(p).ok()?;
+    if !meta.is_file() || meta.len() > MAX_FILE {
+        return None;
+    }
+    std::fs::read_to_string(p).ok()
+}
+
+fn clamp_f(v: f64, lo: f64, hi: f64, def: f64) -> f64 {
+    if v.is_finite() {
+        v.clamp(lo, hi)
+    } else {
+        def
+    }
+}
+
+/// Ramène toutes les valeurs dans des bornes sûres (fichier modifié à la main, corrompu…)
+pub fn sanitize_pattern(p: &mut PatternCfg) {
+    p.steps.truncate(MAX_STEPS);
+    p.hotkey.truncate(6);
+    p.loops = p.loops.min(999_999);
+    for st in &mut p.steps {
+        match st {
+            Step::Hold { value, .. } | Step::Wait { value, .. } => *value = clamp_f(*value, 0.0, 999_999.0, 1.0),
+            Step::Press { count, gap, .. } => {
+                *count = (*count).clamp(1, 100_000);
+                *gap = clamp_f(*gap, 0.0, 600_000.0, 100.0);
+            }
+        }
+    }
+}
+
+pub fn sanitize(s: &mut Settings) {
+    s.spam.value = clamp_f(s.spam.value, 0.0, 999_999.0, 100.0);
+    s.spam.hotkey.truncate(6);
+    sanitize_pattern(&mut s.pattern);
+}
+
 pub fn load() -> Settings {
-    std::fs::read_to_string(config_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    let mut s: Settings = read_small(&config_path()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    sanitize(&mut s);
+    s
+}
+
+pub fn read_pattern_file(p: &std::path::Path) -> Option<PatternFile> {
+    let mut f: PatternFile = serde_json::from_str(&read_small(p)?).ok()?;
+    sanitize_pattern(&mut f.pattern);
+    Some(f)
 }
 
 pub fn save(s: &Settings) {

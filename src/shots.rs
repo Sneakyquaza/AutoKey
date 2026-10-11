@@ -3,7 +3,7 @@ use crate::config::{self, Mode};
 use crate::control::Target;
 use crate::i18n::Lang;
 use crate::ui::{height_for, App, WIDTH};
-use eframe::egui::{self, vec2, ViewportCommand};
+use egui::{self, vec2, ViewportCommand};
 
 pub struct Shots {
     dir: String,
@@ -12,7 +12,7 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 7] = ["spam_fr", "spam_rec_en", "pattern_empty", "pattern_ex", "pattern_run", "pattern_pt", "modal"];
+const SCENES: [&str; 9] = ["spam_fr", "spam_rec_en", "pattern_empty", "pattern_ex", "pattern_run", "pattern_pt", "modal", "update", "update_dl"];
 
 pub fn init(app: &mut App) {
     if let Ok(dir) = std::env::var("AUTOKEY_SHOTS") {
@@ -21,6 +21,12 @@ pub fn init(app: &mut App) {
 }
 
 fn setup(app: &App, ctx: &egui::Context, name: &str) {
+    use crate::update::UpState;
+    *app.updater().state.lock().unwrap() = match name {
+        "update" => UpState::Available { build: 58, exe_url: String::new(), sha_url: String::new() },
+        "update_dl" => UpState::Downloading(42),
+        _ => UpState::Idle,
+    };
     let sh = app.shared();
     sh.runner.stop();
     sh.cancel_record();
@@ -52,6 +58,7 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
             std::thread::sleep(std::time::Duration::from_millis(3200));
             s = sh.settings.lock().unwrap();
         }
+        "update" | "update_dl" => s.mode = Mode::Spam,
         "pattern_pt" => {
             s.mode = Mode::Pattern;
             s.lang = Lang::Pt;
@@ -93,10 +100,11 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     }
     if !st.waiting {
         if st.frame == 0 {
+            app.open_confirm_for_shots(false);
             setup(app, ctx, SCENES[st.scene]);
         }
         if SCENES[st.scene] == "modal" && st.frame == 1 {
-            app.open_confirm_for_shots();
+            app.open_confirm_for_shots(true);
         }
         st.frame += 1;
         if st.frame > 12 {
