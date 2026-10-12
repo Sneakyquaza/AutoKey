@@ -50,8 +50,6 @@ struct Runner {
     last_frame: Instant,
     frames: u64,
     shot_pending: bool,
-    /// redessin demandé par nous (sinon : c'est le système → il faut tout ré-afficher)
-    our_redraw: bool,
     full_present: bool,
     proxy: EventLoopProxy<UserEvent>,
     pin: bool,
@@ -210,9 +208,8 @@ impl ApplicationHandler<UserEvent> for Runner {
                 return;
             }
             WindowEvent::RedrawRequested => {
-                if !std::mem::take(&mut self.our_redraw) {
-                    self.full_present = true; // demande du système (fenêtre découverte, restaurée…)
-                }
+                // demandé par le système (fenêtre affichée, découverte, restaurée…) : tout ré-afficher
+                self.full_present = true;
                 self.paint(el);
                 return;
             }
@@ -243,11 +240,13 @@ impl ApplicationHandler<UserEvent> for Runner {
                 let t = t.max(self.last_frame + MIN_FRAME);
                 if Instant::now() >= t {
                     self.next_frame = None;
-                    if let Some(g) = &self.gfx {
-                        self.our_redraw = true;
-                        g.window.request_redraw();
+                    // on dessine directement : sous Windows, une fenêtre encore invisible
+                    // ne reçoit jamais RedrawRequested (elle ne s'afficherait jamais)
+                    self.paint(el);
+                    match self.next_frame {
+                        Some(n) => el.set_control_flow(ControlFlow::WaitUntil(n.max(self.last_frame + MIN_FRAME))),
+                        None => el.set_control_flow(ControlFlow::Wait),
                     }
-                    el.set_control_flow(ControlFlow::Wait);
                 } else {
                     el.set_control_flow(ControlFlow::WaitUntil(t));
                 }
@@ -294,7 +293,6 @@ fn main() {
         last_frame: Instant::now() - MIN_FRAME,
         frames: 0,
         shot_pending: false,
-        our_redraw: false,
         full_present: true,
         proxy,
         pin,
