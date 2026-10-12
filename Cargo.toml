@@ -2,6 +2,9 @@
 name = "autokey"
 version = "3.1.0"
 edition = "2021"
+authors = ["sneakyquaza"]
+license = "MIT"
+description = "Auto-presser clavier pour Windows"
 
 [dependencies]
 # Interface : egui + fenêtre winit + rendu logiciel (pas d'OpenGL → beaucoup moins de RAM)

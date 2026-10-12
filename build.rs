@@ -36,6 +36,18 @@ fn main() {
         res.set("OriginalFilename", "AutoKey.exe");
         res.set("InternalName", "AutoKey");
         res.set("Comments", &format!("build {build}"));
+        res.set("CompanyName", "sneakyquaza");
+        res.set("LegalCopyright", "© 2026 sneakyquaza — licence MIT");
+        // numéros de version cohérents (3.1.0.<build>) : un exe sans métadonnées paraît plus suspect
+        let ver = env!("CARGO_PKG_VERSION");
+        let mut parts = ver.split('.').map(|x| x.parse::<u64>().unwrap_or(0));
+        let (ma, mi, pa) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+        let b: u64 = build.parse().unwrap_or(0).min(65535);
+        let packed = (ma << 48) | (mi << 32) | (pa << 16) | b;
+        res.set_version_info(winresource::VersionInfo::FILEVERSION, packed);
+        res.set_version_info(winresource::VersionInfo::PRODUCTVERSION, packed);
+        res.set("FileVersion", &format!("{ver}.{b}"));
+        res.set("ProductVersion", &format!("{ver}.{b}"));
         if let Err(e) = res.compile() {
             println!("cargo:warning=ressources Windows non intégrées : {e}");
         }

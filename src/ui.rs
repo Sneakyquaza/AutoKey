@@ -333,13 +333,20 @@ fn icon(p: &Painter, ic: Ic, c: Pos2, size: f32, color: Color32) {
 }
 
 fn logo(p: &Painter, r: Rect) {
-    grad_rect(p, r, r.width() * 0.26, VIOLET, CYAN, true);
+    // icône « Rafale » simplifiée : fond sombre, touche dégradée, ▶▶
     let n = r.width();
     let pt = |x: f32, y: f32| r.min + vec2(x * n, y * n);
-    p.rect_filled(Rect::from_min_max(pt(0.22, 0.64), pt(0.78, 0.78)), n * 0.06, Color32::from_white_alpha(120));
-    p.rect_filled(Rect::from_min_max(pt(0.22, 0.2), pt(0.78, 0.7)), n * 0.1, Color32::from_white_alpha(240));
-    p.add(Shape::convex_polygon(vec![pt(0.57, 0.25), pt(0.37, 0.47), pt(0.55, 0.43)], VIOLET, Stroke::NONE));
-    p.add(Shape::convex_polygon(vec![pt(0.45, 0.45), pt(0.63, 0.41), pt(0.43, 0.64)], VIOLET, Stroke::NONE));
+    grad_rect(p, r, n * 0.22, rgb(0x1A1D29), rgb(0x0B0D12), true);
+    p.rect_filled(Rect::from_min_max(pt(0.15, 0.24), pt(0.85, 0.86)), n * 0.13, rgb(0x1B6E8C));
+    grad_rect(p, Rect::from_min_max(pt(0.15, 0.17), pt(0.85, 0.78)), n * 0.13, rgb(0x9D74FF), CYAN, true);
+    for off in [-0.1f32, 0.06] {
+        let (cx, cy, s) = (0.5 + off, 0.475, 0.19);
+        p.add(Shape::convex_polygon(
+            vec![pt(cx - s * 0.45, cy - s * 0.72), pt(cx + s * 0.55, cy), pt(cx - s * 0.45, cy + s * 0.72)],
+            Color32::WHITE,
+            Stroke::NONE,
+        ));
+    }
 }
 
 // ------------------------------------------------------------------ widgets

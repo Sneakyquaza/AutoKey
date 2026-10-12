@@ -26,7 +26,10 @@ Provenance (dépôt public, avec GitHub CLI) — prouve que l'exe a été compil
 
 ## Avertissement Windows / antivirus
 
-L'exe n'est pas signé (certificat payant), donc SmartScreen affiche « éditeur inconnu » au premier lancement :
-*Informations complémentaires → Exécuter quand même*. Un logiciel qui lit le clavier et simule des touches peut aussi
-être signalé à tort par certains antivirus ; l'exe peut être soumis à Microsoft pour analyse :
-https://www.microsoft.com/wdsi/filesubmission
+L'exe n'est pas encore signé : SmartScreen affiche donc « éditeur inconnu » au premier lancement
+(*Informations complémentaires → Exécuter quand même*). Un logiciel qui lit le clavier et simule des touches
+peut aussi être signalé à tort par certains antivirus. Faux positif → https://www.microsoft.com/wdsi/filesubmission
+
+## Licence
+
+MIT — © 2026 sneakyquaza
