@@ -1,7 +1,7 @@
 use crate::i18n::Lang;
 use crate::keys::KeySpec;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
 pub enum Unit {
@@ -197,7 +197,21 @@ pub fn sanitize(s: &mut Settings) {
 }
 
 pub fn load() -> Settings {
-    let mut s: Settings = read_small(&config_path()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    load_from(&config_path())
+}
+
+/// Fichier présent mais illisible : copié en `config3.bad.json` pour ne pas être écrasé sans trace
+fn load_from(p: &Path) -> Settings {
+    let parsed = read_small(p).and_then(|t| serde_json::from_str::<Settings>(&t).ok());
+    let mut s = match parsed {
+        Some(s) => s,
+        None => {
+            if std::fs::metadata(p).map(|m| m.is_file() && m.len() > 0).unwrap_or(false) {
+                let _ = std::fs::copy(p, p.with_file_name("config3.bad.json"));
+            }
+            Settings::default()
+        }
+    };
     sanitize(&mut s);
     s
 }
@@ -209,13 +223,18 @@ pub fn read_pattern_file(p: &std::path::Path) -> Option<PatternFile> {
 }
 
 pub fn save(s: &Settings) {
-    let p = config_path();
+    let _ = save_to(&config_path(), s);
+}
+
+/// Écriture atomique : fichier temporaire voisin puis renommage
+fn save_to(p: &Path, s: &Settings) -> std::io::Result<()> {
     if let Some(dir) = p.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        std::fs::create_dir_all(dir)?;
     }
-    if let Ok(txt) = serde_json::to_string_pretty(s) {
-        let _ = std::fs::write(p, txt);
-    }
+    let txt = serde_json::to_string_pretty(s).map_err(std::io::Error::other)?;
+    let tmp = p.with_file_name("config3.json.tmp");
+    std::fs::write(&tmp, txt)?;
+    std::fs::rename(&tmp, p)
 }
 
 #[derive(Serialize, Deserialize)]
