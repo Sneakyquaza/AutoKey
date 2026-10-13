@@ -247,6 +247,9 @@ impl ApplicationHandler<UserEvent> for Runner {
 }
 
 fn main() {
+    if !platform::single_instance() {
+        return;
+    }
     platform::init();
     let settings = config::load();
     let (mode, pin) = (settings.mode, settings.pin);

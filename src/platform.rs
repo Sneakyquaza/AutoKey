@@ -105,6 +105,26 @@ mod win {
         }
     }
 
+    /// Mutex nommé de session : une seule instance. Si une autre tourne encore (ex. ancien exe
+    /// en train de quitter après une mise à jour), on attend jusqu'à 8 s qu'elle libère le mutex.
+    pub fn single_instance() -> bool {
+        use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, WAIT_ABANDONED, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+        let name: Vec<u16> = "Local\\AutoKey.SingleInstance\0".encode_utf16().collect();
+        unsafe {
+            // handle volontairement gardé ouvert pendant toute la vie du processus
+            let h = CreateMutexW(std::ptr::null(), 1, name.as_ptr());
+            if h.is_null() {
+                return true; // échec de création : on ne bloque pas le démarrage
+            }
+            if GetLastError() == ERROR_ALREADY_EXISTS {
+                let r = WaitForSingleObject(h, 8000);
+                return r == WAIT_OBJECT_0 || r == WAIT_ABANDONED;
+            }
+        }
+        true
+    }
+
     /// Rend au système la mémoire qui n'a servi qu'à l'initialisation
     pub fn trim_memory() {
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
@@ -211,6 +231,14 @@ pub fn hires(on: bool) {
     }
 }
 
+/// Une seule instance d'AutoKey par session. Faux : une autre instance tourne déjà.
+pub fn single_instance() -> bool {
+    #[cfg(windows)]
+    return win::single_instance();
+    #[cfg(not(windows))]
+    return true;
+}
+
 pub fn trim_memory() {
     #[cfg(windows)]
     win::trim_memory();
@@ -241,6 +269,7 @@ pub fn _wincheck() {
     let _ = win::key_poll(0x41);
     let _ = win::key_spec(0x41);
     win::hires(true);
+    let _ = win::single_instance();
     win::trim_memory();
     win::round_corners(0);
 }
