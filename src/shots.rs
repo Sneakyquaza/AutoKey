@@ -12,7 +12,7 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 9] = ["spam_fr", "spam_rec_en", "pattern_empty", "pattern_ex", "pattern_run", "pattern_pt", "modal", "update", "update_dl"];
+const SCENES: [&str; 10] = ["spam_fr", "spam_rec_en", "pattern_empty", "pattern_ex", "pattern_run", "pattern_pt", "modal", "update", "update_dl", "settings"];
 
 pub fn init(app: &mut App) {
     if let Ok(dir) = std::env::var("AUTOKEY_SHOTS") {
@@ -59,6 +59,7 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
             s = sh.settings.lock().unwrap();
         }
         "update" | "update_dl" => s.mode = Mode::Spam,
+        "settings" => s.mode = Mode::Spam,
         "pattern_pt" => {
             s.mode = Mode::Pattern;
             s.lang = Lang::Pt;
@@ -101,7 +102,11 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     if !st.waiting {
         if st.frame == 0 {
             app.open_confirm_for_shots(false);
+            app.open_settings_for_shots(false);
             setup(app, ctx, SCENES[st.scene]);
+        }
+        if SCENES[st.scene] == "settings" && st.frame == 1 {
+            app.open_settings_for_shots(true);
         }
         if SCENES[st.scene] == "modal" && st.frame == 1 {
             app.open_confirm_for_shots(true);

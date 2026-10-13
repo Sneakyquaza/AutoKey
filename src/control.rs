@@ -12,7 +12,6 @@ pub enum Target {
     SpamKey,
     SpamHotkey,
     PatHotkey,
-    #[allow(dead_code)] // enregistrable depuis l'UI des réglages
     StopHotkey,
     StepKey(usize),
 }

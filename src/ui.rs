@@ -223,6 +223,7 @@ enum Ic {
     Trash,
     Plus,
     Globe,
+    Gear,
     Play,
     Stop,
     Hold,
@@ -277,6 +278,15 @@ fn icon(p: &Painter, ic: Ic, c: Pos2, size: f32, color: Color32) {
             let pts: Vec<Pos2> = (0..=24).map(|i| i as f32 / 24.0 * std::f32::consts::TAU).map(|a| c + vec2(a.cos() * s * 0.13, a.sin() * s * 0.3)).collect();
             poly(pts);
             line(pt(0.2, 0.5), pt(0.8, 0.5));
+        }
+        Ic::Gear => {
+            p.circle_stroke(c, s * 0.17, st);
+            for i in 0..8 {
+                let a = i as f32 * std::f32::consts::TAU / 8.0;
+                let d = vec2(a.cos(), a.sin());
+                line(c + d * s * 0.27, c + d * s * 0.37);
+            }
+            p.circle_stroke(c, s * 0.27, st);
         }
         Ic::Play => {
             p.add(Shape::convex_polygon(vec![pt(0.32, 0.22), pt(0.8, 0.5), pt(0.32, 0.78)], color, Stroke::NONE));
@@ -666,6 +676,7 @@ pub struct App {
     sh: Arc<Shared>,
     up: Arc<crate::update::Updater>,
     lang_open: bool,
+    settings_open: bool,
     confirm_clear: bool,
     last_active: i32,
     frames: u64,
@@ -680,6 +691,7 @@ impl App {
             sh,
             up,
             lang_open: false,
+            settings_open: false,
             confirm_clear: false,
             last_active: -1,
             frames: 0,
@@ -702,6 +714,11 @@ impl App {
     #[cfg(feature = "shots")]
     pub fn open_confirm_for_shots(&mut self, on: bool) {
         self.confirm_clear = on;
+    }
+
+    #[cfg(feature = "shots")]
+    pub fn open_settings_for_shots(&mut self, on: bool) {
+        self.settings_open = on;
     }
 
     fn apply(&mut self, ctx: &egui::Context, a: Act) {
@@ -833,12 +850,15 @@ impl App {
         self.footer(ui, foot, s);
         ui.painter().rect_stroke(full.shrink(0.5), 0.0, sk(1.0, LINE));
 
-        if self.lang_open || self.confirm_clear {
+        if self.lang_open || self.settings_open || self.confirm_clear {
             let ctx = ui.ctx().clone();
             egui::Area::new(Id::new("overlay")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
                 ui.set_min_size(full.size());
                 if self.lang_open {
                     self.lang_popup(ui, full, s, acts);
+                }
+                if self.settings_open {
+                    self.settings_popup(ui, full, s, rec, acts);
                 }
                 if self.confirm_clear {
                     self.confirm_modal(ui, full, s, acts);
@@ -884,6 +904,12 @@ impl App {
             s.pin = !s.pin;
             acts.push(Act::Pin(s.pin));
         }
+        // réglages
+        x -= 38.0;
+        if icon_btn(ui, br(x), "gearbtn", Ic::Gear, tr(lang, "settings"), self.settings_open, false).clicked() {
+            self.settings_open = !self.settings_open;
+            self.lang_open = false;
+        }
         // langue
         let lw = 74.0;
         let lr = Rect::from_min_size(pos2(x - 10.0 - lw, bar.center().y - 16.0), vec2(lw, 32.0));
@@ -894,6 +920,7 @@ impl App {
         text(p, pos2(lr.min.x + 34.0, lr.center().y), Align2::LEFT_CENTER, lang.code(), 13.0, W::S, TEXT);
         if resp.clicked() {
             self.lang_open = !self.lang_open;
+            self.settings_open = false;
         }
 
         // bouton de mise à jour (visible seulement si une nouvelle version existe)
@@ -914,7 +941,7 @@ impl App {
     }
 
     fn lang_popup(&mut self, ui: &mut Ui, full: Rect, s: &mut Settings, acts: &mut Vec<Act>) {
-        let btn_right = full.max.x - 12.0 - 34.0 - 38.0 - 38.0 - 10.0;
+        let btn_right = full.max.x - 12.0 - 34.0 - 38.0 - 38.0 - 38.0 - 10.0;
         let r = Rect::from_min_size(pos2(btn_right - 160.0, full.min.y + 52.0), vec2(160.0, 3.0 * 34.0 + 12.0));
         let p = ui.painter().clone();
         p.rect_filled(r.translate(vec2(0.0, 6.0)).expand(2.0), 14.0, Color32::from_black_alpha(90));
@@ -943,6 +970,37 @@ impl App {
         let clicked_out = ui.input(|i| i.pointer.any_pressed()) && !inside && !lr_hover;
         if clicked_out {
             self.lang_open = false;
+        }
+    }
+
+    fn settings_popup(&mut self, ui: &mut Ui, full: Rect, s: &mut Settings, rec: &Option<Recording>, acts: &mut Vec<Act>) {
+        let lang = s.lang;
+        let gear_right = full.max.x - 12.0 - 34.0 - 38.0 - 38.0;
+        let r = Rect::from_min_size(pos2(gear_right - 300.0, full.min.y + 52.0), vec2(300.0, 2.0 * 50.0 + 12.0));
+        let p = ui.painter().clone();
+        p.rect_filled(r.translate(vec2(0.0, 6.0)).expand(2.0), 14.0, Color32::from_black_alpha(90));
+        p.rect(r, 12.0, SURFACE, sk(1.0, LINE2));
+        let blocker = ui.interact(r, Id::new("setpop"), Sense::click());
+        let mut inside = blocker.hovered();
+        let row = |i: f32| r.min.y + 6.0 + i * 50.0 + 25.0;
+        // durée d'appui
+        text(&p, pos2(r.min.x + 16.0, row(0.0)), Align2::LEFT_CENTER, tr(lang, "press_dur"), 13.0, W::S, TEXT);
+        let nr = Rect::from_center_size(pos2(r.max.x - 16.0 - 40.0 - 22.0, row(0.0)), vec2(80.0, 36.0));
+        num_field(ui, nr, Id::new("pressms"), &mut s.press_ms, 0.0, config::MAX_PRESS_MS, true, 16.0, true, lang);
+        inside |= ui.rect_contains_pointer(nr);
+        text(&p, pos2(nr.max.x + 8.0, row(0.0)), Align2::LEFT_CENTER, "ms", 12.0, W::S, MUTED);
+        // arrêt d'urgence
+        text(&p, pos2(r.min.x + 16.0, row(1.0)), Align2::LEFT_CENTER, tr(lang, "stop_hk"), 13.0, W::S, TEXT);
+        let (lbl, recording) = Self::rec_label(s, rec, Target::StopHotkey, combo_label(&s.stop_hotkey, lang));
+        let cr = Rect::from_center_size(pos2(r.max.x - 16.0 - 60.0, row(1.0)), vec2(120.0, 36.0));
+        let resp = keycap(ui, cr, Id::new("stophk"), &lbl, recording, CapSize::Mid, lang, true).on_hover_text(tr(lang, "click_change"));
+        inside |= resp.hovered();
+        if resp.clicked() {
+            acts.push(Act::Record(Target::StopHotkey));
+        }
+        let btn_hover = ui.ctx().read_response(Id::new("gearbtn")).map(|r| r.hovered()).unwrap_or(false);
+        if ui.input(|i| i.pointer.any_pressed()) && !inside && !btn_hover {
+            self.settings_open = false;
         }
     }
 
