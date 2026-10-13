@@ -151,9 +151,36 @@ impl Shared {
         self.rec.lock().unwrap().clone()
     }
 
+    /// Vrai si l'enregistrement de `keys` pour `t` créerait un conflit : deux raccourcis identiques,
+    /// un raccourci contenant une touche de spam/d'étape (nos propres frappes sont ignorées), ou
+    /// une touche de spam/d'étape appartenant à un raccourci.
+    fn conflicts(s: &Settings, t: Target, keys: &[KeySpec]) -> bool {
+        let hotkeys: [(Target, &Vec<KeySpec>); 3] =
+            [(Target::SpamHotkey, &s.spam.hotkey), (Target::PatHotkey, &s.pattern.hotkey), (Target::StopHotkey, &s.stop_hotkey)];
+        let has = |v: &[KeySpec], vk: u16| v.iter().any(|k| k.vk == vk);
+        if !t.is_combo() {
+            return keys.first().is_some_and(|k| hotkeys.iter().any(|(_, h)| has(h, k.vk)));
+        }
+        if keys.is_empty() {
+            return false;
+        }
+        let same = |a: &[KeySpec], b: &[KeySpec]| a.len() == b.len() && a.iter().all(|k| has(b, k.vk));
+        let action_keys = std::iter::once(&s.spam.key).chain(s.pattern.steps.iter().filter_map(|st| match st {
+            Step::Hold { key, .. } | Step::Press { key, .. } => Some(key),
+            Step::Wait { .. } => None,
+        }));
+        hotkeys.iter().any(|(o, h)| *o != t && same(h, keys)) || action_keys.into_iter().any(|k| has(keys, k.vk))
+    }
+
     fn commit(&self, t: Target, keys: Vec<KeySpec>) {
         {
             let mut s = self.settings.lock().unwrap();
+            if Self::conflicts(&s, t, &keys) {
+                drop(s);
+                *self.flash.lock().unwrap() = Some(("hk_conflict", std::time::Instant::now()));
+                self.repaint();
+                return;
+            }
             match t {
                 Target::SpamKey => s.spam.key = keys[0].clone(),
                 Target::SpamHotkey => s.spam.hotkey = keys,
@@ -222,21 +249,27 @@ impl Shared {
                 self.pressed.lock().unwrap().clone(),
             )
         };
+        // [spam, pattern, arrêt] : un raccourci n'est « on » que si aucun raccourci plus spécifique
+        // (sur-ensemble strict de touches) n'est lui aussi entièrement pressé.
+        let sets: [&[KeySpec]; 3] = [&binds[0].1, &binds[1].1, &stop_keys];
+        let full = sets.map(|k| !k.is_empty() && k.iter().all(|x| pressed.contains(&x.vk)));
+        let ons: [bool; 3] = std::array::from_fn(|i| {
+            full[i] && !(0..3).any(|j| j != i && full[j] && sets[j].len() > sets[i].len() && sets[i].iter().all(|a| sets[j].iter().any(|b| b.vk == a.vk)))
+        });
         // arrêt d'urgence : indépendant du mode
-        let stop_on = !stop_keys.is_empty() && stop_keys.iter().all(|k| pressed.contains(&k.vk));
         let stop_changed = {
             let mut a = self.active.lock().unwrap();
-            let c = a[2] != stop_on;
-            a[2] = stop_on;
+            let c = a[2] != ons[2];
+            a[2] = ons[2];
             c
         };
-        if stop_changed && stop_on {
+        if stop_changed && ons[2] {
             self.runner.stop();
             self.repaint();
         }
-        for (m, keys, hk) in binds {
+        for (m, _, hk) in binds {
             let i = Self::idx(m) as usize;
-            let on = !keys.is_empty() && keys.iter().all(|k| pressed.contains(&k.vk));
+            let on = ons[i];
             let changed = {
                 let mut a = self.active.lock().unwrap();
                 let c = a[i] != on;
@@ -413,5 +446,80 @@ mod tests {
         }
         let hk: Vec<u16> = sh.settings.lock().unwrap().stop_hotkey.iter().map(|k| k.vk).collect();
         assert_eq!(hk, vec![0xA2, 0x78]);
+    }
+
+    #[test]
+    fn conflicting_hotkeys_rejected() {
+        let (sh, _) = setup();
+        let rec = |t: Target, keys: &[u16]| {
+            sh.begin_record(t);
+            for &vk in keys {
+                sh.handle(ev(vk, true));
+            }
+            for &vk in keys {
+                sh.handle(ev(vk, false));
+            }
+        };
+        let hk = |t: Target| -> Vec<u16> {
+            let s = sh.settings.lock().unwrap();
+            let v = match t {
+                Target::SpamHotkey => &s.spam.hotkey,
+                Target::PatHotkey => &s.pattern.hotkey,
+                _ => &s.stop_hotkey,
+            };
+            v.iter().map(|k| k.vk).collect()
+        };
+        // même ensemble qu'un autre raccourci (F7 = motif)
+        rec(Target::SpamHotkey, &[0x76]);
+        assert_eq!(hk(Target::SpamHotkey), vec![0x75]);
+        assert_eq!(sh.flash.lock().unwrap().map(|f| f.0), Some("hk_conflict"));
+        *sh.flash.lock().unwrap() = None;
+        // idem pour l'arrêt (F6 = spam)
+        rec(Target::StopHotkey, &[0x75]);
+        assert_eq!(hk(Target::StopHotkey), vec![0x77]);
+        // raccourci contenant la touche de spam ('E' = 0x45)
+        rec(Target::PatHotkey, &[0xA2, 0x45]);
+        assert_eq!(hk(Target::PatHotkey), vec![0x76]);
+        // raccourci contenant une touche d'étape
+        sh.settings.lock().unwrap().pattern.steps = config::example_steps(); // z, x, z
+        rec(Target::PatHotkey, &[0xA2, 0x58]);
+        assert_eq!(hk(Target::PatHotkey), vec![0x76]);
+        // touche de spam / d'étape appartenant à un raccourci
+        sh.flash.lock().unwrap().take();
+        rec(Target::SpamKey, &[0x77]);
+        assert_eq!(sh.settings.lock().unwrap().spam.key.vk, 0x45);
+        rec(Target::StepKey(1), &[0x76]);
+        assert!(matches!(&sh.settings.lock().unwrap().pattern.steps[1], Step::Hold { key, .. } if key.vk == 0x58));
+        assert_eq!(sh.flash.lock().unwrap().map(|f| f.0), Some("hk_conflict"));
+        // cas valides inchangés
+        rec(Target::StopHotkey, &[0xA2, 0x75]);
+        assert_eq!(hk(Target::StopHotkey), vec![0xA2, 0x75]);
+        rec(Target::SpamKey, &[0x51]);
+        assert_eq!(sh.settings.lock().unwrap().spam.key.vk, 0x51);
+    }
+
+    #[test]
+    fn most_specific_combo_wins() {
+        let (sh, _) = setup();
+        // Ctrl+F6 pour le spam, F6 pour le motif (steps non vides)
+        {
+            let mut s = sh.settings.lock().unwrap();
+            s.spam.hotkey = vec![KeySpec::vk(0xA2), KeySpec::vk(0x75)];
+            s.pattern.hotkey = vec![KeySpec::vk(0x75)];
+            s.pattern.steps = config::example_steps();
+        }
+        sh.handle(ev(0xA2, true));
+        sh.handle(ev(0x75, true));
+        assert!(sh.is_running(Mode::Spam));
+        assert!(!sh.is_running(Mode::Pattern), "F6 seul ne doit pas se déclencher");
+        sh.handle(ev(0x75, false));
+        sh.handle(ev(0xA2, false));
+        sh.runner.stop();
+        // F6 seul + touche non liée tenue (Shift) : le raccourci fonctionne
+        sh.handle(ev(0xA0, true));
+        sh.handle(ev(0x75, true));
+        assert!(sh.is_running(Mode::Pattern));
+        sh.handle(ev(0x75, false));
+        sh.handle(ev(0xA0, false));
     }
 }

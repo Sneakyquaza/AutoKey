@@ -88,6 +88,7 @@ static T: &[(&str, [&str; 3])] = &[
     ),
     ("running_spam", ["En cours — {n} pressions", "Running — {n} presses", "Em execução — {n} toques"]),
     ("running_pat", ["En cours — boucle {i}/{n} · étape {s}/{t}", "Running — loop {i}/{n} · step {s}/{t}", "Em execução — repetição {i}/{n} · etapa {s}/{t}"]),
+    ("hk_conflict", ["Conflit : touche déjà utilisée", "Conflict: key already in use", "Conflito: tecla já usada"]),
     ("no_steps", ["Ajoute au moins une étape.", "Add at least one step.", "Adicione pelo menos uma etapa."]),
     ("bad_file", ["Fichier invalide.", "Invalid file.", "Arquivo inválido."]),
     ("saved", ["Pattern enregistré.", "Pattern saved.", "Padrão salvo."]),
