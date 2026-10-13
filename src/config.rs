@@ -170,7 +170,7 @@ pub fn cycle_seconds(steps: &[Step]) -> f64 {
 }
 
 fn config_path() -> PathBuf {
-    let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| {
+    let base = std::env::var_os("APPDATA").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         home.join(".config")
     });
