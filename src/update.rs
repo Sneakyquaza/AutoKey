@@ -196,8 +196,8 @@ impl Updater {
             if data.len() as u64 > MAX_EXE {
                 return Err("up_bad");
             }
-            if total > 0 {
-                self.set(UpState::Downloading(((data.len() as u64 * 100) / total).min(99) as u8));
+            if let Some(pct) = (data.len() as u64 * 100).checked_div(total) {
+                self.set(UpState::Downloading(pct.min(99) as u8));
             }
         }
         // 3) vérifications

@@ -250,10 +250,10 @@ pub fn spawn_poller(shared: Arc<Shared>) {
             let recording = shared.rec.lock().unwrap().is_some();
             let mut watch = [false; 256];
             if recording {
-                for vk in 0x08..=0xFEusize {
+                for (vk, w) in watch.iter_mut().enumerate().take(0xFF).skip(0x08) {
                     // ni souris (0x01-0x07), ni modificateurs génériques (on garde gauche/droite)
-                    if !matches!(vk, 0x10 | 0x11 | 0x12) {
-                        watch[vk] = true;
+                    if !matches!(vk, 0x10..=0x12) {
+                        *w = true;
                     }
                 }
             } else {

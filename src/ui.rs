@@ -4,8 +4,8 @@ use crate::control::{Recording, Shared, Target};
 use crate::i18n::{fmt_duration, fmt_num, tr, trf, Lang};
 use crate::keys::combo_label;
 use egui::{
-    self, epaint, pos2, vec2, Align, Align2, Color32, CursorIcon, FontFamily, FontId, Id, Painter, Pos2, Rect, Response,
-    Sense, Shape, Stroke, TextEdit, Ui, Vec2, ViewportCommand,
+    self, epaint, pos2, vec2, Align, Align2, Color32, CursorIcon, FontFamily, FontId, Id, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, TextEdit, Ui,
+    Vec2, ViewportCommand,
 };
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
@@ -72,7 +72,8 @@ pub fn setup_fonts(ctx: &egui::Context) {
     #[cfg(windows)]
     let dir = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts\\")).unwrap_or_else(|_| "C:\\Windows\\Fonts\\".into());
     #[cfg(windows)]
-    let files: [&[&str]; 3] = [&["segoeui.ttf", "arial.ttf", "tahoma.ttf"], &["seguisb.ttf", "segoeuib.ttf", "arialbd.ttf"], &["segoeuib.ttf", "arialbd.ttf", "tahomabd.ttf"]];
+    let files: [&[&str]; 3] =
+        [&["segoeui.ttf", "arial.ttf", "tahoma.ttf"], &["seguisb.ttf", "segoeuib.ttf", "arialbd.ttf"], &["segoeuib.ttf", "arialbd.ttf", "tahomabd.ttf"]];
     #[cfg(not(windows))]
     let dir = "/usr/share/fonts/opentype/inter/".to_string();
     #[cfg(not(windows))]
@@ -140,8 +141,7 @@ fn lighten(c: Color32, t: f32) -> Color32 {
 /// Rectangle arrondi rempli d'un dégradé (diagonal ou vertical)
 fn grad_rect(p: &Painter, r: Rect, rounding: f32, c0: Color32, c1: Color32, diagonal: bool) {
     let mut mesh = epaint::Mesh::default();
-    let mut tess =
-        epaint::Tessellator::new(p.ctx().pixels_per_point(), epaint::TessellationOptions::default(), [1, 1], vec![]);
+    let mut tess = epaint::Tessellator::new(p.ctx().pixels_per_point(), epaint::TessellationOptions::default(), [1, 1], vec![]);
     tess.tessellate_rect(&epaint::RectShape::filled(r, rounding, Color32::WHITE), &mut mesh);
     for v in &mut mesh.vertices {
         let tx = (v.pos.x - r.min.x) / r.width().max(1.0);
@@ -164,11 +164,7 @@ fn card(p: &Painter, r: Rect) {
 
 fn spaced_text(p: &Painter, pos: Pos2, text: &str, size: f32, color: Color32) -> Rect {
     let mut job = egui::text::LayoutJob::default();
-    job.append(
-        text,
-        0.0,
-        egui::TextFormat { font_id: font(size, W::B), color, extra_letter_spacing: 1.2, ..Default::default() },
-    );
+    job.append(text, 0.0, egui::TextFormat { font_id: font(size, W::B), color, extra_letter_spacing: 1.2, ..Default::default() });
     let g = p.layout_job(job);
     let r = Rect::from_min_size(pos, g.size());
     p.galley(pos, g, color);
@@ -278,8 +274,7 @@ fn icon(p: &Painter, ic: Ic, c: Pos2, size: f32, color: Color32) {
         }
         Ic::Globe => {
             p.circle_stroke(c, s * 0.3, st);
-            let pts: Vec<Pos2> =
-                (0..=24).map(|i| i as f32 / 24.0 * std::f32::consts::TAU).map(|a| c + vec2(a.cos() * s * 0.13, a.sin() * s * 0.3)).collect();
+            let pts: Vec<Pos2> = (0..=24).map(|i| i as f32 / 24.0 * std::f32::consts::TAU).map(|a| c + vec2(a.cos() * s * 0.13, a.sin() * s * 0.3)).collect();
             poly(pts);
             line(pt(0.2, 0.5), pt(0.8, 0.5));
         }
@@ -314,10 +309,7 @@ fn icon(p: &Painter, ic: Ic, c: Pos2, size: f32, color: Color32) {
             p.add(Shape::convex_polygon(vec![pt(0.12, 0.5), pt(0.5, 0.4), pt(0.88, 0.5), pt(0.5, 0.6)], color, Stroke::NONE));
         }
         Ic::Loop => {
-            let pts: Vec<Pos2> = (0..=20)
-                .map(|i| (-60.0 + i as f32 * 300.0 / 20.0).to_radians())
-                .map(|a| c + vec2(a.cos(), a.sin()) * s * 0.28)
-                .collect();
+            let pts: Vec<Pos2> = (0..=20).map(|i| (-60.0 + i as f32 * 300.0 / 20.0).to_radians()).map(|a| c + vec2(a.cos(), a.sin()) * s * 0.28).collect();
             let end = *pts.last().unwrap();
             poly(pts);
             poly(vec![end + vec2(-s * 0.16, -s * 0.02), end, end + vec2(-s * 0.02, -s * 0.16)]);
@@ -365,7 +357,13 @@ fn icon_btn(ui: &mut Ui, r: Rect, id: &str, ic: Ic, tip: &str, checked: bool, da
         let c = if danger { ROSE } else { SURFACE2 };
         p.rect_filled(r, 8.0, c.gamma_multiply(h));
     }
-    let col = if danger && h > 0.5 { Color32::WHITE } else if checked { lighten(VIOLET, 0.3) } else { TEXT };
+    let col = if danger && h > 0.5 {
+        Color32::WHITE
+    } else if checked {
+        lighten(VIOLET, 0.3)
+    } else {
+        TEXT
+    };
     icon(p, ic, r.center(), 18.0, col);
     if tip.is_empty() {
         resp
@@ -404,12 +402,7 @@ fn tool_btn(ui: &mut Ui, pos: Pos2, h: f32, id: Id, ic: Ic, ic_col: Color32, lab
     let resp = hand(ui.interact(r, id, Sense::click()));
     let p = ui.painter();
     let hov = resp.hovered();
-    p.rect(
-        r,
-        10.0,
-        if checked { rgb(0x2A2345) } else { SURFACE2 },
-        sk(1.0, if hov || checked { VIOLET } else { LINE2 }),
-    );
+    p.rect(r, 10.0, if checked { rgb(0x2A2345) } else { SURFACE2 }, sk(1.0, if hov || checked { VIOLET } else { LINE2 }));
     icon(p, ic, pos2(r.min.x + 12.0 + 8.0, r.center().y), 16.0, ic_col);
     text(p, pos2(r.min.x + 12.0 + 16.0 + 8.0, r.center().y), Align2::LEFT_CENTER, label, 13.0, W::S, TEXT);
     (resp, w)
@@ -726,11 +719,7 @@ impl App {
                 ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(WIDTH, height_for(m))));
             }
             Act::SetLang => {}
-            Act::Pin(on) => ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if on {
-                egui::WindowLevel::AlwaysOnTop
-            } else {
-                egui::WindowLevel::Normal
-            })),
+            Act::Pin(on) => ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if on { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal })),
             Act::Minimize => ctx.send_viewport_cmd(ViewportCommand::Minimized(true)),
             Act::Close => ctx.send_viewport_cmd(ViewportCommand::Close),
             Act::StepsChanged => {
@@ -845,18 +834,15 @@ impl App {
 
         if self.lang_open || self.confirm_clear {
             let ctx = ui.ctx().clone();
-            egui::Area::new(Id::new("overlay"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(full.min)
-                .show(&ctx, |ui| {
-                    ui.set_min_size(full.size());
-                    if self.lang_open {
-                        self.lang_popup(ui, full, s, acts);
-                    }
-                    if self.confirm_clear {
-                        self.confirm_modal(ui, full, s, acts);
-                    }
-                });
+            egui::Area::new(Id::new("overlay")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
+                ui.set_min_size(full.size());
+                if self.lang_open {
+                    self.lang_popup(ui, full, s, acts);
+                }
+                if self.confirm_clear {
+                    self.confirm_modal(ui, full, s, acts);
+                }
+            });
         }
         let _ = lang;
     }
@@ -914,8 +900,7 @@ impl App {
             let label = tr(lang, "update");
             let uw = text_width(ui.painter(), label, 13.0, W::S) + 44.0;
             let ur = Rect::from_min_size(pos2(lr.min.x - 10.0 - uw, bar.center().y - 16.0), vec2(uw, 32.0));
-            let resp = hand(ui.interact(ur, Id::new("updbtn"), Sense::click()))
-                .on_hover_text(trf(lang, "update_tip", &[("b", build.to_string())]));
+            let resp = hand(ui.interact(ur, Id::new("updbtn"), Sense::click())).on_hover_text(trf(lang, "update_tip", &[("b", build.to_string())]));
             let p = ui.painter();
             let h = if resp.hovered() { 0.12 } else { 0.0 };
             grad_rect(p, ur, 9.0, lighten(VIOLET, h), lighten(CYAN, h), true);
@@ -1152,7 +1137,15 @@ impl App {
         }
         let hm = if m == Mode::Spam { &mut s.spam.hk_mode } else { &mut s.pattern.hk_mode };
         let seg = Rect::from_min_size(pos2(cap.min.x, cap.max.y + 12.0), vec2(cap.width(), 38.0));
-        segmented(ui, seg, Id::new("hkmode").with(m as u8), &[(HkMode::Toggle, tr(lang, "toggle").into()), (HkMode::Hold, tr(lang, "hold").into())], hm, 13.0, false);
+        segmented(
+            ui,
+            seg,
+            Id::new("hkmode").with(m as u8),
+            &[(HkMode::Toggle, tr(lang, "toggle").into()), (HkMode::Hold, tr(lang, "hold").into())],
+            hm,
+            13.0,
+            false,
+        );
         let hint = if *hm == HkMode::Toggle { tr(lang, "hk_toggle_hint") } else { tr(lang, "hk_hold_hint") };
         wrapped(&p, Rect::from_min_size(pos2(seg.min.x + 2.0, seg.max.y + 12.0), vec2(seg.width() - 4.0, 40.0)), hint, 12.0, W::R, MUTED, false);
     }
@@ -1238,7 +1231,15 @@ impl App {
             acts.push(Act::Record(Target::PatHotkey));
         }
         let seg = Rect::from_min_size(pos2(cap.max.x + 10.0, ry), vec2(seg_w, 36.0));
-        segmented(ui, seg, Id::new("hkmode").with(1u8), &[(HkMode::Toggle, tr(lang, "toggle").into()), (HkMode::Hold, tr(lang, "hold").into())], &mut s.pattern.hk_mode, 13.0, false);
+        segmented(
+            ui,
+            seg,
+            Id::new("hkmode").with(1u8),
+            &[(HkMode::Toggle, tr(lang, "toggle").into()), (HkMode::Hold, tr(lang, "hold").into())],
+            &mut s.pattern.hk_mode,
+            13.0,
+            false,
+        );
         let hint_txt = if s.pattern.hk_mode == HkMode::Toggle { tr(lang, "hk_toggle_hint") } else { tr(lang, "hk_hold_hint") };
         ui.interact(seg, Id::new("hkmode_tip"), Sense::hover()).on_hover_text(hint_txt);
 
@@ -1270,7 +1271,16 @@ impl App {
                     icon(&p, Ic::Keyboard, pos2(r.center().x, r.center().y - 44.0), 46.0, MUTED);
                     text(&p, pos2(r.center().x, r.center().y + 2.0), Align2::CENTER_CENTER, tr(lang, "empty"), 14.0, W::R, MUTED);
                     let bw = text_width(&p, tr(lang, "example"), 13.0, W::S) + 48.0;
-                    let (resp, _) = tool_btn(ui, pos2(r.center().x - bw / 2.0, r.center().y + 26.0), 34.0, Id::new("ex_empty"), Ic::Spark, AMBER, tr(lang, "example"), false);
+                    let (resp, _) = tool_btn(
+                        ui,
+                        pos2(r.center().x - bw / 2.0, r.center().y + 26.0),
+                        34.0,
+                        Id::new("ex_empty"),
+                        Ic::Spark,
+                        AMBER,
+                        tr(lang, "example"),
+                        false,
+                    );
                     if resp.clicked() {
                         add = Some("example");
                     }
@@ -1344,7 +1354,18 @@ impl App {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn step_card(&mut self, ui: &mut Ui, r: Rect, i: usize, n: usize, step: &mut Step, rec: &Option<Recording>, active: bool, lang: Lang, acts: &mut Vec<Act>) -> Option<&'static str> {
+    fn step_card(
+        &mut self,
+        ui: &mut Ui,
+        r: Rect,
+        i: usize,
+        n: usize,
+        step: &mut Step,
+        rec: &Option<Recording>,
+        active: bool,
+        lang: Lang,
+        acts: &mut Vec<Act>,
+    ) -> Option<&'static str> {
         let p = ui.painter().clone();
         let kind = step.kind();
         let col = kind_color(kind);

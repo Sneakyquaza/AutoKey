@@ -214,11 +214,7 @@ pub mod tests {
     fn pattern_counts() {
         let log = Arc::new(Log::default());
         let r = Runner::new(log.clone());
-        let steps = vec![
-            CStep::Hold(KeySpec::letter('z'), 0.02),
-            CStep::Wait(0.01),
-            CStep::Press(KeySpec::letter('e'), 3, 0.005),
-        ];
+        let steps = vec![CStep::Hold(KeySpec::letter('z'), 0.02), CStep::Wait(0.01), CStep::Press(KeySpec::letter('e'), 3, 0.005)];
         r.start(Job::Pattern { steps, loops: 2 });
         sleep(800);
         assert!(!r.running());

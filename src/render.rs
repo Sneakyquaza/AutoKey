@@ -1,9 +1,9 @@
 //! Rendu logiciel d'egui (pas d'OpenGL/GPU) : rasteriseur de triangles + redessin partiel.
 //! Seules les zones qui ont changé depuis l'image précédente sont redessinées.
 use egui::epaint::{textures::TexturesDelta, ClippedPrimitive, ClippedShape, ColorMode, ImageData, Mesh, PathStroke, Primitive, Shape, Tessellator, TextureId};
-use std::sync::Arc;
 use egui::{Color32, Rect};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IRect {
@@ -34,12 +34,7 @@ impl IRect {
         }
     }
     fn from_rect(r: Rect, ppp: f32) -> IRect {
-        IRect {
-            x0: (r.min.x * ppp).floor() as i32,
-            y0: (r.min.y * ppp).floor() as i32,
-            x1: (r.max.x * ppp).ceil() as i32,
-            y1: (r.max.y * ppp).ceil() as i32,
-        }
+        IRect { x0: (r.min.x * ppp).floor() as i32, y0: (r.min.y * ppp).floor() as i32, x1: (r.max.x * ppp).ceil() as i32, y1: (r.max.y * ppp).ceil() as i32 }
     }
 }
 
@@ -205,16 +200,7 @@ fn pack(c: [u8; 4]) -> u32 {
 
 impl Renderer {
     pub fn new(bg: Color32) -> Self {
-        Renderer {
-            w: 0,
-            h: 0,
-            fb: vec![],
-            bg: pack(bg.to_array()),
-            textures: HashMap::new(),
-            prev: vec![],
-            force_full: true,
-            cache: HashMap::new(),
-        }
+        Renderer { w: 0, h: 0, fb: vec![], bg: pack(bg.to_array()), textures: HashMap::new(), prev: vec![], force_full: true, cache: HashMap::new() }
     }
 
     pub fn set_textures(&mut self, delta: &TexturesDelta) {
@@ -307,7 +293,8 @@ impl Renderer {
             };
             for (i, (bbox, clip, tex, mesh)) in entry.prims.iter().enumerate() {
                 // non hachable → empreinte unique : toujours considéré comme modifié
-                let hash = if hashable { key ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) } else { self.prev.len() as u64 ^ 0xF00D ^ (prims.len() as u64) << 20 };
+                let hash =
+                    if hashable { key ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) } else { self.prev.len() as u64 ^ 0xF00D ^ (prims.len() as u64) << 20 };
                 prims.push(Prim { hash, bbox: *bbox, clip: *clip, tex: *tex, mesh: mesh.clone() });
             }
             if hashable {
@@ -443,7 +430,7 @@ fn raster_mesh(fb: &mut [u32], fbw: usize, mesh: &Mesh, tex: Option<&Tex>, ppp: 
         return;
     }
     let white = [255u8; 4];
-    for tri in mesh.indices.chunks_exact(3) {
+    for tri in mesh.indices.as_chunks::<3>().0 {
         let mut vs = [&mesh.vertices[tri[0] as usize], &mesh.vertices[tri[1] as usize], &mesh.vertices[tri[2] as usize]];
         let mut p = [vs[0].pos * ppp, vs[1].pos * ppp, vs[2].pos * ppp];
         let mut area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x);
@@ -489,16 +476,10 @@ fn raster_mesh(fb: &mut [u32], fbw: usize, mesh: &Mesh, tex: Option<&Tex>, ppp: 
         };
         let interp_color = !same_color;
         let interp_uv = !same_uv && tex.is_some();
-        let cp: [(f32, f32, f32); 4] = if interp_color {
-            [0, 1, 2, 3].map(|i| plane(c[0][i] as f32, c[1][i] as f32, c[2][i] as f32))
-        } else {
-            [(0.0, 0.0, 0.0); 4]
-        };
-        let (up, vp) = if interp_uv {
-            (plane(vs[0].uv.x, vs[1].uv.x, vs[2].uv.x), plane(vs[0].uv.y, vs[1].uv.y, vs[2].uv.y))
-        } else {
-            ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-        };
+        let cp: [(f32, f32, f32); 4] =
+            if interp_color { [0, 1, 2, 3].map(|i| plane(c[0][i] as f32, c[1][i] as f32, c[2][i] as f32)) } else { [(0.0, 0.0, 0.0); 4] };
+        let (up, vp) =
+            if interp_uv { (plane(vs[0].uv.x, vs[1].uv.x, vs[2].uv.x), plane(vs[0].uv.y, vs[1].uv.y, vs[2].uv.y)) } else { ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)) };
 
         for y in y0..y1 {
             let py = y as f32 + 0.5;
@@ -524,11 +505,8 @@ fn raster_mesh(fb: &mut [u32], fbw: usize, mesh: &Mesh, tex: Option<&Tex>, ppp: 
                 continue;
             }
             let fx = xs as f32 + 0.5;
-            let mut w = [
-                e[0].0 * fx + e[0].1 * py + e[0].2 + bias[0],
-                e[1].0 * fx + e[1].1 * py + e[1].2 + bias[1],
-                e[2].0 * fx + e[2].1 * py + e[2].2 + bias[2],
-            ];
+            let mut w =
+                [e[0].0 * fx + e[0].1 * py + e[0].2 + bias[0], e[1].0 * fx + e[1].1 * py + e[1].2 + bias[1], e[2].0 * fx + e[2].1 * py + e[2].2 + bias[2]];
             let mut col = [0f32; 4];
             if interp_color {
                 for i in 0..4 {

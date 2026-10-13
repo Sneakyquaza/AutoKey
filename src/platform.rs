@@ -34,8 +34,8 @@ mod win {
     use crate::engine::Keyboard;
     use crate::keys::{is_extended_vk, KeySpec};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, GetKeyNameTextW, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MAPVK_VK_TO_VSC, MAPVK_VK_TO_VSC_EX,
+        GetAsyncKeyState, GetKeyNameTextW, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+        KEYEVENTF_SCANCODE, MAPVK_VK_TO_VSC, MAPVK_VK_TO_VSC_EX,
     };
 
     pub struct WinKeyboard;
@@ -57,10 +57,8 @@ mod win {
             } else {
                 (k.vk, 0u16)
             };
-            let input = INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: wvk, wScan: wscan, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
-            };
+            let input =
+                INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: wvk, wScan: wscan, dwFlags: flags, time: 0, dwExtraInfo: 0 } } };
             SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
         }
     }

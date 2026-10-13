@@ -140,17 +140,9 @@ impl Runner {
             self.shot_pending = false;
             let img = egui::ColorImage {
                 size: [self.renderer.w, self.renderer.h],
-                pixels: self
-                    .renderer
-                    .fb
-                    .iter()
-                    .map(|p| egui::Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, *p as u8))
-                    .collect(),
+                pixels: self.renderer.fb.iter().map(|p| egui::Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, *p as u8)).collect(),
             };
-            g.state
-                .egui_input_mut()
-                .events
-                .push(egui::Event::Screenshot { viewport_id: egui::ViewportId::ROOT, image: Arc::new(img) });
+            g.state.egui_input_mut().events.push(egui::Event::Screenshot { viewport_id: egui::ViewportId::ROOT, image: Arc::new(img) });
             sched(&mut self.next_frame, Duration::ZERO);
         }
         if self.vinfo.close_requested() || self.app.wants_quit() {
@@ -215,10 +207,8 @@ impl ApplicationHandler<UserEvent> for Runner {
             }
             _ => {}
         }
-        let resized = matches!(
-            event,
-            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(false) | WindowEvent::Focused(_)
-        );
+        let resized =
+            matches!(event, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(false) | WindowEvent::Focused(_));
         if resized {
             self.full_present = true;
         }
