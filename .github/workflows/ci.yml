@@ -1,0 +1,60 @@
+name: CI
+
+# Vérification de chaque push/PR : format, lints (Linux + Windows), tests, audit des dépendances.
+# Ne publie rien : la release se fait via build.yml (tag v*).
+on:
+  push:
+    branches: ["**"]
+    paths-ignore: ["**/*.md"]
+  pull_request:
+    paths-ignore: ["**/*.md"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Toolchain (rust-toolchain.toml) + cible Windows
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-mingw-w64-x86-64
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy (Linux)
+        run: cargo clippy --locked --all-targets --features shots -- -D warnings
+
+      - name: Clippy (Windows)
+        run: cargo clippy --locked --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-audit
+      - name: Audit de sécurité des dépendances (RustSec)
+        run: cargo audit

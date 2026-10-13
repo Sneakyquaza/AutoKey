@@ -2,3 +2,4 @@
 *.exe
 *.exe.sha256
 .claude/settings.local.json
+.claude/worktrees/

@@ -1,50 +1,64 @@
 name: Build & Release AutoKey
 
+# Release uniquement sur tag v* (= version de Cargo.toml) ou lancement manuel.
+# Chaque release publiée est proposée en mise à jour automatique à tous les utilisateurs.
 on:
   push:
-    branches: [main, master]
-    paths:
-      - "src/**"
-      - "assets/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "build.rs"
-      - ".github/workflows/**"
-      - "!**/*.md"
+    tags: ["v*"]
   workflow_dispatch:
 
-# droits minimum : publier la release + attester la provenance de l'exe
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  # clé publique minisign intégrée dans l'appli (src/update.rs) : la signature produite doit la satisfaire
+  MINISIGN_PUBKEY: RWRpMB1oOVO8oAhJTqnFniOXTkaykl7/VHz7aPE2WQodN+jhG6DtcX6V
+
 jobs:
   build:
     runs-on: windows-latest
+    outputs:
+      build: ${{ steps.num.outputs.build }}
     env:
       AUTOKEY_REPO: ${{ github.repository }}
-      AUTOKEY_BUILD: ${{ github.run_number }}
-      CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - name: Rust stable
-        run: rustup update stable && rustup default stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Audit de sécurité des dépendances (RustSec)
-        continue-on-error: true
+      - name: Le tag doit correspondre à la version de Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
         run: |
-          cargo install cargo-audit --locked
-          cargo audit
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} différent de la version Cargo.toml (v$v)" }
+
+      # Numéro comparé par l'updater (tag build-N) : toujours croissant, même si le workflow est recréé
+      - name: Numéro de build
+        id: num
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $last = 0
+          foreach ($t in (gh release list --limit 200 --json tagName --jq '.[].tagName')) {
+            if ($t -match '^build-(\d+)$') { $last = [Math]::Max($last, [int]$Matches[1]) }
+          }
+          $n = [Math]::Max($last + 1, [int]"${{ github.run_number }}")
+          "AUTOKEY_BUILD=$n" >> $env:GITHUB_ENV
+          "build=$n" >> $env:GITHUB_OUTPUT
+          "Build n°$n" | Out-Host
+
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Tests
         run: cargo test --release --locked
@@ -52,33 +66,67 @@ jobs:
       - name: Compilation
         run: cargo build --release --locked
 
-      - name: Préparer l'exe et son empreinte SHA-256
+      - name: Préparer l'exe
         shell: pwsh
+        run: Copy-Item target\release\autokey.exe AutoKey.exe
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: AutoKey
+          path: AutoKey.exe
+          if-no-files-found: error
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-audit
+      - name: Audit de sécurité des dépendances (RustSec) — bloquant
+        run: cargo audit
+
+  release:
+    needs: [build, audit]
+    runs-on: ubuntu-latest
+    # droits minimum : publier la release + attester la provenance de l'exe
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      N: ${{ needs.build.outputs.build }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: AutoKey
+
+      - name: Empreinte SHA-256
+        run: sha256sum AutoKey.exe | tee AutoKey.exe.sha256
+
+      - name: Signature minisign
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
         run: |
-          Copy-Item target\release\autokey.exe AutoKey.exe
-          $h = (Get-FileHash AutoKey.exe -Algorithm SHA256).Hash.ToLower()
-          [IO.File]::WriteAllText("AutoKey.exe.sha256", "$h  AutoKey.exe`n")
-          "SHA-256 : $h" | Out-Host
+          if [ -z "$MINISIGN_KEY" ]; then echo "::error::secret MINISIGN_KEY manquant"; exit 1; fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          umask 077
+          printf '%s\n' "$MINISIGN_KEY" > "$RUNNER_TEMP/minisign.key"
+          minisign -S -s "$RUNNER_TEMP/minisign.key" -m AutoKey.exe -x AutoKey.exe.minisig -t "AutoKey build $N"
+          rm -f "$RUNNER_TEMP/minisign.key"
+          minisign -V -P "$MINISIGN_PUBKEY" -m AutoKey.exe -x AutoKey.exe.minisig
 
       - name: Attestation de provenance (preuve que l'exe vient de ce dépôt)
-        continue-on-error: true
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: AutoKey.exe
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: AutoKey
-          path: |
-            AutoKey.exe
-            AutoKey.exe.sha256
-
       - name: Publier la release (déclenche la mise à jour dans l'appli)
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          $n = "${{ github.run_number }}"
-          $notes = "Build automatique n°$n (commit ${{ github.sha }}).`n`nVérifier l'empreinte : comparer avec AutoKey.exe.sha256.`nVérifier la provenance : gh attestation verify AutoKey.exe -R ${{ github.repository }}"
-          gh release create "build-$n" AutoKey.exe AutoKey.exe.sha256 --title "AutoKey build $n" --notes "$notes" --latest
+          notes="Build n°$N (${GITHUB_REF_NAME}, commit ${GITHUB_SHA})."$'\n\n'"Vérifier l'empreinte : comparer avec AutoKey.exe.sha256."$'\n'"Vérifier la signature : minisign -Vm AutoKey.exe -P $MINISIGN_PUBKEY"$'\n'"Vérifier la provenance : gh attestation verify AutoKey.exe -R ${GITHUB_REPOSITORY}"
+          gh release create "build-$N" AutoKey.exe AutoKey.exe.sha256 AutoKey.exe.minisig --title "AutoKey build $N" --notes "$notes" --latest
