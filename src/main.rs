@@ -251,6 +251,12 @@ fn main() {
         return;
     }
     platform::init();
+    // panique : ne jamais laisser de touche enfoncée (le hook tourne aussi avec panic = "abort")
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        platform::release_held();
+        prev_hook(info);
+    }));
     let settings = config::load();
     let (mode, pin) = (settings.mode, settings.pin);
 

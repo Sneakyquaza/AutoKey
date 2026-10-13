@@ -812,6 +812,7 @@ impl App {
 
     pub fn on_exit(&mut self) {
         self.sh.runner.stop();
+        crate::platform::release_held();
         self.sh.save_now();
     }
 }

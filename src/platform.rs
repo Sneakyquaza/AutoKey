@@ -168,6 +168,18 @@ impl Keyboard for NullKeyboard {
     }
 }
 
+/// Relâche toute touche que nous avons envoyée enfoncée (panique, sortie) : n'utilise que des atomiques.
+pub fn release_held() {
+    for vk in 0..256u16 {
+        if INJ[vk as usize].load(Relaxed) == HELD {
+            #[cfg(windows)]
+            win::WinKeyboard.up(&KeySpec::vk(vk));
+            #[cfg(not(windows))]
+            NullKeyboard.up(&KeySpec::vk(vk));
+        }
+    }
+}
+
 pub fn keyboard() -> Arc<dyn Keyboard> {
     #[cfg(windows)]
     return Arc::new(win::WinKeyboard);
@@ -287,4 +299,21 @@ pub fn pick_open() -> Option<std::path::PathBuf> {
     return rfd::FileDialog::new().add_filter("AutoKey", &["json"]).pick_file();
     #[cfg(not(windows))]
     return None;
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_held_releases_only_held_keys() {
+        let (a, b) = (KeySpec::vk(0xE8), KeySpec::vk(0xE9));
+        NullKeyboard.down(&a);
+        NullKeyboard.down(&b);
+        NullKeyboard.up(&b);
+        release_held();
+        assert_ne!(INJ[0xE8].load(Relaxed), HELD);
+        assert!(!FAKE[0xE8].load(Relaxed));
+        assert_ne!(INJ[0xE9].load(Relaxed), HELD);
+    }
 }
