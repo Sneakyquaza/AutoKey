@@ -1089,10 +1089,13 @@ impl App {
         let row_y = int_r.min.y + 70.0;
         let seg_w = 150.0;
         let num_r = Rect::from_min_size(pos2(int_r.min.x + 18.0, row_y), vec2(iw - 36.0 - seg_w - 10.0, 64.0));
-        num_field(ui, num_r, Id::new("spamval"), &mut s.spam.value, 0.0, 999_999.0, false, 32.0, true, lang);
+        let min_v = config::MIN_INTERVAL_S / s.spam.unit.factor();
+        num_field(ui, num_r, Id::new("spamval"), &mut s.spam.value, min_v, 999_999.0, false, 32.0, true, lang);
         let seg_r = Rect::from_min_size(pos2(num_r.max.x + 10.0, row_y), vec2(seg_w, 64.0));
         let items: Vec<(Unit, String)> = Unit::ALL.iter().map(|u| (*u, u.label().to_string())).collect();
         segmented(ui, seg_r, Id::new("spamunit"), &items, &mut s.spam.unit, 13.0, false);
+        // changement d'unité : on garde l'intervalle minimum
+        s.spam.value = s.spam.value.max(config::MIN_INTERVAL_S / s.spam.unit.factor());
         let mut cx = int_r.min.x + 18.0;
         for (i, (v, u)) in [(50.0, Unit::Ms), (100.0, Unit::Ms), (500.0, Unit::Ms), (1.0, Unit::S), (1.0, Unit::Min)].iter().enumerate() {
             let (clicked, w) = chip(ui, pos2(cx, row_y + 76.0), Id::new("chip").with(i), &format!("{} {}", fmt_num(lang, *v), u.label()));
@@ -1102,7 +1105,7 @@ impl App {
             }
             cx += w + 6.0;
         }
-        let iv = config::secs(s.spam.value, s.spam.unit).max(0.001);
+        let iv = config::secs(s.spam.value, s.spam.unit).max(config::MIN_INTERVAL_S);
         rhythm(&p, Rect::from_min_size(pos2(int_r.min.x + 18.0, int_r.max.y - 84.0), vec2(iw - 36.0, 46.0)), iv);
         let rate = if iv <= 1.0 {
             trf(lang, "rate_s", &[("n", fmt_num(lang, (10.0 / iv).round() / 10.0))])

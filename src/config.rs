@@ -156,6 +156,8 @@ fn config_path() -> PathBuf {
 
 const MAX_FILE: u64 = 1024 * 1024;
 const MAX_STEPS: usize = 500;
+/// Intervalle minimum du spam (10 ms)
+pub const MIN_INTERVAL_S: f64 = 0.010;
 
 /// Lecture bornée : fichier ≤ 1 Mo, sinon ignoré
 fn read_small(p: &std::path::Path) -> Option<String> {
@@ -192,6 +194,9 @@ pub fn sanitize_pattern(p: &mut PatternCfg) {
 
 pub fn sanitize(s: &mut Settings) {
     s.spam.value = clamp_f(s.spam.value, 0.0, 999_999.0, 100.0);
+    if secs(s.spam.value, s.spam.unit) < MIN_INTERVAL_S {
+        s.spam.value = MIN_INTERVAL_S / s.spam.unit.factor();
+    }
     s.spam.hotkey.truncate(6);
     sanitize_pattern(&mut s.pattern);
 }

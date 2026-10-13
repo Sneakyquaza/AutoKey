@@ -127,7 +127,7 @@ fn tap(kb: &dyn Keyboard, k: &KeySpec, st: &Status) {
 fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, job: Job) {
     match job {
         Job::Spam { key, interval } => {
-            let iv = Duration::from_secs_f64(interval.max(0.001));
+            let iv = Duration::from_secs_f64(interval.max(crate::config::MIN_INTERVAL_S));
             let mut next = Instant::now();
             loop {
                 tap(kb, &key, st);
