@@ -247,3 +247,152 @@ pub struct PatternFile {
     pub autokey: u32,
     pub pattern: PatternCfg,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static N: AtomicU32 = AtomicU32::new(0);
+
+    /// Dossier temporaire unique, supprimé à la destruction
+    struct Tmp(PathBuf);
+    impl Tmp {
+        fn new() -> Tmp {
+            let d = std::env::temp_dir().join(format!("autokey_test_{}_{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(&d).unwrap();
+            Tmp(d)
+        }
+        fn file(&self) -> PathBuf {
+            self.0.join("config3.json")
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn press(count: u32, gap: f64) -> Step {
+        Step::Press { key: KeySpec::letter('a'), count, gap }
+    }
+
+    #[test]
+    fn sanitize_spam_value_bounds() {
+        for (v, want) in [(f64::NAN, 100.0), (f64::INFINITY, 100.0), (-5.0, 10.0), (1e12, 999_999.0)] {
+            let mut s = Settings::default();
+            s.spam.value = v;
+            sanitize(&mut s);
+            assert_eq!(s.spam.value, want, "entrée {v}");
+        }
+    }
+
+    #[test]
+    fn sanitize_min_interval() {
+        let mut s = Settings::default();
+        s.spam.value = 0.0;
+        s.spam.unit = Unit::Ms;
+        sanitize(&mut s);
+        assert!((secs(s.spam.value, s.spam.unit) - MIN_INTERVAL_S).abs() < 1e-12);
+
+        s.spam.value = 0.001;
+        s.spam.unit = Unit::S;
+        sanitize(&mut s);
+        assert!((secs(s.spam.value, s.spam.unit) - MIN_INTERVAL_S).abs() < 1e-12);
+        assert_eq!(s.spam.unit, Unit::S);
+
+        s.spam.value = 20.0;
+        s.spam.unit = Unit::Ms;
+        sanitize(&mut s);
+        assert_eq!(s.spam.value, 20.0);
+    }
+
+    #[test]
+    fn sanitize_truncates() {
+        let mut s = Settings::default();
+        s.pattern.steps = vec![Step::new_wait(); 600];
+        s.pattern.hotkey = vec![KeySpec::vk(0x70); 9];
+        s.spam.hotkey = vec![KeySpec::vk(0x70); 9];
+        s.pattern.loops = u32::MAX;
+        sanitize(&mut s);
+        assert_eq!(s.pattern.steps.len(), MAX_STEPS);
+        assert_eq!(s.pattern.hotkey.len(), 6);
+        assert_eq!(s.spam.hotkey.len(), 6);
+        assert_eq!(s.pattern.loops, 999_999);
+    }
+
+    #[test]
+    fn sanitize_step_values() {
+        let mut s = Settings::default();
+        s.pattern.steps = vec![
+            Step::Hold { key: KeySpec::letter('a'), value: f64::NAN, unit: Unit::S },
+            Step::Wait { value: -1.0, unit: Unit::Ms },
+            Step::Wait { value: 1e12, unit: Unit::Ms },
+            press(0, f64::INFINITY),
+            press(u32::MAX, -3.0),
+        ];
+        sanitize(&mut s);
+        assert_eq!(s.pattern.steps[0], Step::Hold { key: KeySpec::letter('a'), value: 1.0, unit: Unit::S });
+        assert_eq!(s.pattern.steps[1], Step::Wait { value: 0.0, unit: Unit::Ms });
+        assert_eq!(s.pattern.steps[2], Step::Wait { value: 999_999.0, unit: Unit::Ms });
+        assert_eq!(s.pattern.steps[3], press(1, 100.0));
+        assert_eq!(s.pattern.steps[4], press(100_000, 0.0));
+    }
+
+    #[test]
+    fn partial_and_legacy_json() {
+        let t = Tmp::new();
+        std::fs::write(t.file(), r#"{"lang":"en"}"#).unwrap();
+        let s = load_from(&t.file());
+        let d = Settings { lang: Lang::En, ..Default::default() };
+        assert_eq!(s, d);
+
+        std::fs::write(t.file(), r#"{"pin":true,"champ_inconnu":42,"spam":{"value":250.0}}"#).unwrap();
+        let s = load_from(&t.file());
+        assert!(s.pin);
+        assert_eq!(s.spam.value, 250.0);
+        assert_eq!(s.spam.key, SpamCfg::default().key);
+        assert_eq!(s.pattern, PatternCfg::default());
+        assert!(!t.0.join("config3.bad.json").exists());
+    }
+
+    #[test]
+    fn missing_file_gives_defaults() {
+        let t = Tmp::new();
+        assert_eq!(load_from(&t.file()), Settings::default());
+        assert!(!t.0.join("config3.bad.json").exists());
+    }
+
+    #[test]
+    fn save_load_roundtrip() {
+        let t = Tmp::new();
+        let p = t.0.join("sous").join("config3.json");
+        let mut s = Settings { lang: Lang::Pt, pin: true, mode: Mode::Pattern, ..Default::default() };
+        s.spam.value = 2.5;
+        s.spam.unit = Unit::S;
+        s.pattern.steps = crate::config::example_steps();
+        s.pattern.loops = 3;
+        save_to(&p, &s).unwrap();
+        assert!(!p.with_file_name("config3.json.tmp").exists());
+        assert_eq!(load_from(&p), s);
+        // écrasement d'une sauvegarde existante
+        s.pin = false;
+        save_to(&p, &s).unwrap();
+        assert_eq!(load_from(&p), s);
+    }
+
+    #[test]
+    fn corrupt_file_is_kept() {
+        let t = Tmp::new();
+        std::fs::write(t.file(), "{ pas du json").unwrap();
+        assert_eq!(load_from(&t.file()), Settings::default());
+        let bad = t.0.join("config3.bad.json");
+        assert_eq!(std::fs::read_to_string(&bad).unwrap(), "{ pas du json");
+
+        // un nouveau fichier corrompu écrase l'ancien .bad
+        std::fs::write(t.file(), "[1,2").unwrap();
+        load_from(&t.file());
+        assert_eq!(std::fs::read_to_string(&bad).unwrap(), "[1,2");
+    }
+}
