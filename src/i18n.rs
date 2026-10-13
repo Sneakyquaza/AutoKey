@@ -189,3 +189,58 @@ pub fn fmt_duration(lang: Lang, sec: f64) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_unique_and_translations_non_empty() {
+        let mut seen = std::collections::HashSet::new();
+        for (k, v) in T {
+            assert!(seen.insert(*k), "clé en double : {k}");
+            for (i, s) in v.iter().enumerate() {
+                assert!(!s.trim().is_empty(), "traduction vide : {k} (langue {i})");
+            }
+        }
+    }
+
+    /// Littéraux passés en 2e argument de `tr(` / `trf(` dans un source
+    fn used_keys(src: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for name in ["tr(", "trf("] {
+            for (pos, _) in src.match_indices(name) {
+                // exclut les identifiants plus longs (ex. `str(`, `entry(`)
+                if src[..pos].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+                    continue;
+                }
+                let rest = &src[pos + name.len()..];
+                let Some(comma) = rest.find(',') else { continue };
+                let Some(lit) = rest[comma + 1..].trim_start().strip_prefix('"') else { continue };
+                if let Some(end) = lit.find('"') {
+                    out.push(lit[..end].to_string());
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn used_keys_parser() {
+        let k = used_keys(r#"x = tr(lang, "a"); trf(self.lang, "b", &[]); str(lang, "no"); tr(lang, k);"#);
+        assert_eq!(k, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn literal_keys_exist() {
+        let files = [("ui.rs", include_str!("ui.rs")), ("keys.rs", include_str!("keys.rs"))];
+        let mut total = 0;
+        for (name, src) in files {
+            for k in used_keys(src) {
+                total += 1;
+                assert!(T.iter().any(|(t, _)| *t == k), "clé inconnue dans {name} : {k}");
+            }
+        }
+        assert!(total > 20, "extraction suspecte : {total} clés");
+    }
+}
