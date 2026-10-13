@@ -224,6 +224,18 @@ pub fn sanitize(s: &mut Settings) {
     s.stop_hotkey.truncate(6);
     s.press_ms = clamp_f(s.press_ms, 0.0, MAX_PRESS_MS, DEFAULT_PRESS_MS);
     sanitize_pattern(&mut s.pattern);
+    // arrêt d'urgence (F8 par défaut) en conflit avec un réglage existant : désactivé plutôt que d'interférer
+    let vks = |v: &[KeySpec]| v.iter().map(|k| k.vk).collect::<std::collections::BTreeSet<u16>>();
+    let stop = vks(&s.stop_hotkey);
+    let action_key = std::iter::once(&s.spam.key)
+        .chain(s.pattern.steps.iter().filter_map(|st| match st {
+            Step::Hold { key, .. } | Step::Press { key, .. } => Some(key),
+            Step::Wait { .. } => None,
+        }))
+        .any(|k| stop.contains(&k.vk));
+    if action_key || stop == vks(&s.spam.hotkey) || stop == vks(&s.pattern.hotkey) {
+        s.stop_hotkey.clear();
+    }
 }
 
 pub fn load() -> Settings {
@@ -275,6 +287,21 @@ pub struct PatternFile {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stop_hotkey_disabled_when_conflicting() {
+        let mut s = Settings::default();
+        s.spam.hotkey = vec![KeySpec::vk(0x77)]; // F8 = arrêt par défaut
+        sanitize(&mut s);
+        assert!(s.stop_hotkey.is_empty());
+        let mut s = Settings::default();
+        s.spam.key = KeySpec::vk(0x77);
+        sanitize(&mut s);
+        assert!(s.stop_hotkey.is_empty());
+        let mut s = Settings::default();
+        sanitize(&mut s);
+        assert_eq!(s.stop_hotkey.iter().map(|k| k.vk).collect::<Vec<_>>(), vec![0x77]);
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -350,7 +377,7 @@ mod tests {
         s.pattern.steps = vec![Step::new_wait(); 600];
         s.pattern.hotkey = vec![KeySpec::vk(0x70); 9];
         s.spam.hotkey = vec![KeySpec::vk(0x70); 9];
-        s.stop_hotkey = vec![KeySpec::vk(0x70); 9];
+        s.stop_hotkey = vec![KeySpec::vk(0x71); 9];
         s.pattern.loops = u32::MAX;
         sanitize(&mut s);
         assert_eq!(s.pattern.steps.len(), MAX_STEPS);
