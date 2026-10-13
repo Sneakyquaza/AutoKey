@@ -28,7 +28,7 @@ fn recently_injected(vk: u16) -> bool {
     v == HELD || (v != 0 && now_ms().saturating_sub(v) < 60)
 }
 
-#[cfg(any(windows, feature = "wincheck"))]
+#[cfg(windows)]
 mod win {
     use super::{mark_injected, recently_injected};
     use crate::engine::Keyboard;
@@ -258,7 +258,7 @@ pub fn trim_memory() {
 
 /// Appelé une fois la fenêtre affichée : coins arrondis (Win 11) puis libération de la mémoire d'init
 pub fn after_window_shown(_w: &winit::window::Window) {
-    #[cfg(any(windows, feature = "wincheck"))]
+    #[cfg(windows)]
     {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
         if let Ok(h) = _w.window_handle() {
@@ -271,19 +271,6 @@ pub fn after_window_shown(_w: &winit::window::Window) {
         std::thread::sleep(std::time::Duration::from_secs(3));
         trim_memory();
     });
-}
-
-// garde le code Windows « utilisé » quand on le vérifie depuis Linux
-#[cfg(all(not(windows), feature = "wincheck"))]
-pub fn _wincheck() {
-    let kb: Arc<dyn Keyboard> = Arc::new(win::WinKeyboard);
-    kb.down(&KeySpec::vk(0x41));
-    let _ = win::key_poll(0x41);
-    let _ = win::key_spec(0x41);
-    win::hires(true);
-    let _ = win::single_instance();
-    win::trim_memory();
-    win::round_corners(0);
 }
 
 /// Boîtes de dialogue natives (Windows). Ailleurs : aucune.

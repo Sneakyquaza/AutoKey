@@ -19,7 +19,9 @@ ureq = { version = "2.12", default-features = false, features = ["tls", "proxy-f
 sha2 = "0.10"
 # Mise à jour : vérification de la signature minisign (pure Rust)
 minisign-verify = "0.2"
-# Compile aussi hors Windows (déclarations seules) : permet de vérifier le code Windows depuis Linux
+
+[target.'cfg(windows)'.dependencies]
+# API Windows (clavier, fenêtres, mutex d'instance unique…)
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_UI_Input_KeyboardAndMouse",
@@ -30,8 +32,6 @@ windows-sys = { version = "0.59", features = [
   "Win32_Graphics_Dwm",
   "Win32_Security",
 ] }
-
-[target.'cfg(windows)'.dependencies]
 # boîtes de dialogue Ouvrir / Enregistrer natives
 rfd = { version = "0.15", default-features = false }
 
@@ -39,7 +39,6 @@ rfd = { version = "0.15", default-features = false }
 winresource = "0.1"
 
 [features]
-wincheck = []
 # Captures d'écran automatiques (dev uniquement)
 shots = []
 
