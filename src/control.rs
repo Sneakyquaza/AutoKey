@@ -12,12 +12,14 @@ pub enum Target {
     SpamKey,
     SpamHotkey,
     PatHotkey,
+    #[allow(dead_code)] // enregistrable depuis l'UI des réglages
+    StopHotkey,
     StepKey(usize),
 }
 
 impl Target {
     pub fn is_combo(self) -> bool {
-        matches!(self, Target::SpamHotkey | Target::PatHotkey)
+        matches!(self, Target::SpamHotkey | Target::PatHotkey | Target::StopHotkey)
     }
 }
 
@@ -36,7 +38,7 @@ pub struct Shared {
     pub flash: Mutex<Option<(&'static str, std::time::Instant)>>,
     ctx: OnceLock<egui::Context>,
     pressed: Mutex<HashSet<u16>>,
-    active: Mutex<[bool; 2]>,
+    active: Mutex<[bool; 3]>,
 }
 
 impl Shared {
@@ -49,7 +51,7 @@ impl Shared {
             flash: Mutex::new(None),
             ctx: OnceLock::new(),
             pressed: Mutex::new(HashSet::new()),
-            active: Mutex::new([false; 2]),
+            active: Mutex::new([false; 3]),
         })
     }
 
@@ -156,6 +158,7 @@ impl Shared {
                 Target::SpamKey => s.spam.key = keys[0].clone(),
                 Target::SpamHotkey => s.spam.hotkey = keys,
                 Target::PatHotkey => s.pattern.hotkey = keys,
+                Target::StopHotkey => s.stop_hotkey = keys,
                 Target::StepKey(i) => {
                     if let Some(k) = s.pattern.steps.get_mut(i).and_then(|st| st.key_mut()) {
                         *k = keys[0].clone();
@@ -163,7 +166,7 @@ impl Shared {
                 }
             }
         }
-        *self.active.lock().unwrap() = [false; 2];
+        *self.active.lock().unwrap() = [false; 3];
         self.mark_dirty();
     }
 
@@ -211,13 +214,26 @@ impl Shared {
     }
 
     fn check_bindings(&self) {
-        let (binds, pressed) = {
+        let (binds, stop_keys, pressed) = {
             let s = self.settings.lock().unwrap();
             (
                 [(Mode::Spam, s.spam.hotkey.clone(), s.spam.hk_mode), (Mode::Pattern, s.pattern.hotkey.clone(), s.pattern.hk_mode)],
+                s.stop_hotkey.clone(),
                 self.pressed.lock().unwrap().clone(),
             )
         };
+        // arrêt d'urgence : indépendant du mode
+        let stop_on = !stop_keys.is_empty() && stop_keys.iter().all(|k| pressed.contains(&k.vk));
+        let stop_changed = {
+            let mut a = self.active.lock().unwrap();
+            let c = a[2] != stop_on;
+            a[2] = stop_on;
+            c
+        };
+        if stop_changed && stop_on {
+            self.runner.stop();
+            self.repaint();
+        }
         for (m, keys, hk) in binds {
             let i = Self::idx(m) as usize;
             let on = !keys.is_empty() && keys.iter().all(|k| pressed.contains(&k.vk));
@@ -258,7 +274,7 @@ pub fn spawn_poller(shared: Arc<Shared>) {
                 }
             } else {
                 let s = shared.settings.lock().unwrap();
-                for k in s.spam.hotkey.iter().chain(s.pattern.hotkey.iter()) {
+                for k in s.spam.hotkey.iter().chain(s.pattern.hotkey.iter()).chain(s.stop_hotkey.iter()) {
                     watch[(k.vk & 0xFF) as usize] = true;
                 }
             }
@@ -370,5 +386,32 @@ mod tests {
         sh.handle(ev(0x76, false));
         sh.handle(ev(0x76, true));
         assert!(!sh.is_running(Mode::Pattern));
+    }
+
+    #[test]
+    fn stop_hotkey_stops_any_mode() {
+        let (sh, _) = setup();
+        assert_eq!(sh.settings.lock().unwrap().stop_hotkey[0].vk, 0x77);
+        sh.settings.lock().unwrap().spam.hk_mode = HkMode::Hold;
+        sh.start(Mode::Spam);
+        assert!(sh.is_running(Mode::Spam));
+        sh.handle(ev(0x77, true));
+        assert!(!sh.runner.running());
+        sh.handle(ev(0x77, false));
+
+        sh.settings.lock().unwrap().pattern.steps = config::example_steps();
+        sh.start(Mode::Pattern);
+        assert!(sh.is_running(Mode::Pattern));
+        sh.handle(ev(0x77, true));
+        assert!(!sh.runner.running());
+        sh.handle(ev(0x77, false));
+
+        // enregistrement d'un combo d'arrêt
+        sh.begin_record(Target::StopHotkey);
+        for (vk, d) in [(0xA2, true), (0x78, true), (0x78, false), (0xA2, false)] {
+            sh.handle(ev(vk, d));
+        }
+        let hk: Vec<u16> = sh.settings.lock().unwrap().stop_hotkey.iter().map(|k| k.vk).collect();
+        assert_eq!(hk, vec![0xA2, 0x78]);
     }
 }

@@ -133,6 +133,8 @@ pub struct Settings {
     pub pattern: PatternCfg,
     /// Durée de maintien de chaque frappe (ms)
     pub press_ms: f64,
+    /// Raccourci d'arrêt d'urgence (arrête tout, quel que soit le mode)
+    pub stop_hotkey: Vec<KeySpec>,
 }
 
 /// Durée d'appui par défaut (ms)
@@ -149,6 +151,7 @@ impl Default for Settings {
             spam: SpamCfg::default(),
             pattern: PatternCfg::default(),
             press_ms: DEFAULT_PRESS_MS,
+            stop_hotkey: vec![KeySpec::vk(0x77)],
         }
     }
 }
@@ -218,6 +221,7 @@ pub fn sanitize(s: &mut Settings) {
         s.spam.value = MIN_INTERVAL_S / s.spam.unit.factor();
     }
     s.spam.hotkey.truncate(6);
+    s.stop_hotkey.truncate(6);
     s.press_ms = clamp_f(s.press_ms, 0.0, MAX_PRESS_MS, DEFAULT_PRESS_MS);
     sanitize_pattern(&mut s.pattern);
 }
@@ -346,11 +350,13 @@ mod tests {
         s.pattern.steps = vec![Step::new_wait(); 600];
         s.pattern.hotkey = vec![KeySpec::vk(0x70); 9];
         s.spam.hotkey = vec![KeySpec::vk(0x70); 9];
+        s.stop_hotkey = vec![KeySpec::vk(0x70); 9];
         s.pattern.loops = u32::MAX;
         sanitize(&mut s);
         assert_eq!(s.pattern.steps.len(), MAX_STEPS);
         assert_eq!(s.pattern.hotkey.len(), 6);
         assert_eq!(s.spam.hotkey.len(), 6);
+        assert_eq!(s.stop_hotkey.len(), 6);
         assert_eq!(s.pattern.loops, 999_999);
     }
 
