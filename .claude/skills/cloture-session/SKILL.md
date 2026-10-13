@@ -1,6 +1,6 @@
 ---
 name: cloture-session
-description: Clôture une session de travail sur AutoKey avant /clear — met à jour les CLAUDE.md imbriqués (ajoute le nécessaire, supprime l'obsolète, garde-les courts) puis commit en Conventional Commits. À lancer en fin de feature.
+description: Clôture une session AutoKey (MAJ des CLAUDE.md imbriqués + commit Conventional Commits). À utiliser UNIQUEMENT quand l'utilisateur dit explicitement vouloir clôturer / arrêter là / faire un clear / finir la session. Jamais de sa propre initiative, même en fin de feature.
 ---
 
 # Clôture de session

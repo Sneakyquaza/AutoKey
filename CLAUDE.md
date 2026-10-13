@@ -6,7 +6,7 @@ Auto-presser clavier Windows (Rust 2021, egui 0.29 rendu logiciel, winit 0.30). 
 - Opus = orchestrateur : cadre, lit le minimum, découpe, relit le diff. N'écrit pas le code lui-même sauf micro-fix (< ~10 lignes).
 - Implémentation → agent `code-implementer` (Sonnet). Lui passer : fichiers exacts, fonctions visées, critères d'acceptation, contraintes. Pas de contexte superflu.
 - Lire par plages (`grep -n` puis `sed -n a,bp`), jamais un gros fichier entier (`src/ui.rs` = 1400 l.).
-- Fin de feature → skill `/cloture-session` (MAJ CLAUDE.md + commit conventionnel), puis `/clear`.
+- Skill `/cloture-session` (MAJ CLAUDE.md + commit) : seulement quand l'utilisateur dit vouloir clôturer / arrêter / clear. Jamais spontanément.
 
 ## Carte
 - `src/` : code, voir `src/CLAUDE.md`.
