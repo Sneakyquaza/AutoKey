@@ -1,6 +1,7 @@
 //! Mise à jour automatique depuis les Releases GitHub du dépôt qui a compilé l'exe.
 //! Sécurité : HTTPS uniquement (rustls), seules les URL du dépôt sont acceptées,
-//! taille limitée, empreinte SHA-256 vérifiée, signature « MZ » vérifiée,
+//! taille limitée, empreinte SHA-256 vérifiée, signature minisign vérifiée (clé publique
+//! des releases intégrée), en-tête « MZ » vérifié,
 //! remplacement atomique avec retour arrière en cas d'échec.
 use crate::control::Shared;
 use sha2::{Digest, Sha256};
@@ -16,12 +17,15 @@ pub const BUILD: Option<&str> = option_env!("AUTOKEY_BUILD");
 
 const EXE_ASSET: &str = "AutoKey.exe";
 const SHA_ASSET: &str = "AutoKey.exe.sha256";
+const SIG_ASSET: &str = "AutoKey.exe.minisig";
+/// Clé publique minisign des releases (la clé privée est dans le secret GitHub MINISIGN_KEY).
+const PUBKEY: &str = "RWRpMB1oOVO8oAhJTqnFniOXTkaykl7/VHz7aPE2WQodN+jhG6DtcX6V";
 const MAX_EXE: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum UpState {
     Idle,
-    Available { build: u64, exe_url: String, sha_url: String },
+    Available { build: u64, exe_url: String, sha_url: String, sig_url: String },
     Downloading(u8),
     Failed(&'static str),
     Restarting,
@@ -48,8 +52,8 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// Analyse la réponse JSON de /releases/latest. Renvoie (build, url exe, url sha) si plus récent.
-pub fn parse_release(json: &str, repo: &str, cur: u64) -> Option<(u64, String, String)> {
+/// Analyse la réponse JSON de /releases/latest. Renvoie (build, url exe, url sha, url signature) si plus récent.
+pub fn parse_release(json: &str, repo: &str, cur: u64) -> Option<(u64, String, String, String)> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     if v.get("draft").and_then(|d| d.as_bool()) == Some(true) || v.get("prerelease").and_then(|d| d.as_bool()) == Some(true) {
         return None;
@@ -62,6 +66,7 @@ pub fn parse_release(json: &str, repo: &str, cur: u64) -> Option<(u64, String, S
     let prefix = format!("https://github.com/{repo}/releases/download/");
     let mut exe = None;
     let mut sha = None;
+    let mut sig = None;
     for a in v.get("assets")?.as_array()? {
         let name = a.get("name").and_then(|n| n.as_str()).unwrap_or("");
         let url = a.get("browser_download_url").and_then(|n| n.as_str()).unwrap_or("");
@@ -71,10 +76,11 @@ pub fn parse_release(json: &str, repo: &str, cur: u64) -> Option<(u64, String, S
         match name {
             EXE_ASSET => exe = Some(url.to_string()),
             SHA_ASSET => sha = Some(url.to_string()),
+            SIG_ASSET => sig = Some(url.to_string()),
             _ => {}
         }
     }
-    Some((build, exe?, sha?))
+    Some((build, exe?, sha?, sig?))
 }
 
 pub fn parse_sha(txt: &str) -> Option<[u8; 32]> {
@@ -97,6 +103,13 @@ pub fn verify(data: &[u8], got: &[u8; 32], expected: &[u8; 32]) -> Result<(), &'
         return Err("up_bad");
     }
     Ok(())
+}
+
+/// La signature minisign (fichier .minisig) doit correspondre aux données et à la clé publique
+pub fn verify_sig(data: &[u8], sig_txt: &str, pubkey_b64: &str) -> Result<(), &'static str> {
+    let pk = minisign_verify::PublicKey::from_base64(pubkey_b64).map_err(|_| "up_bad")?;
+    let sig = minisign_verify::Signature::decode(sig_txt).map_err(|_| "up_bad")?;
+    pk.verify(data, &sig, false).map_err(|_| "up_bad")
 }
 
 /// Remplace l'exe : actuel → .old, nouveau → nom d'origine. Retour arrière si une étape échoue.
@@ -146,8 +159,8 @@ impl Updater {
                     let resp = agent().get(&url).set("Accept", "application/vnd.github+json").call();
                     if let Ok(r) = resp {
                         if let Ok(body) = r.into_string() {
-                            if let Some((build, exe_url, sha_url)) = parse_release(&body, repo, current_build()) {
-                                me.set(UpState::Available { build, exe_url, sha_url });
+                            if let Some((build, exe_url, sha_url, sig_url)) = parse_release(&body, repo, current_build()) {
+                                me.set(UpState::Available { build, exe_url, sha_url, sig_url });
                             }
                         }
                     }
@@ -158,21 +171,24 @@ impl Updater {
     }
 
     pub fn install(self: &Arc<Self>) {
-        let UpState::Available { exe_url, sha_url, .. } = self.state() else { return };
+        let UpState::Available { exe_url, sha_url, sig_url, .. } = self.state() else { return };
         self.set(UpState::Downloading(0));
         let me = self.clone();
         std::thread::spawn(move || {
-            if let Err(e) = me.do_install(&exe_url, &sha_url) {
+            if let Err(e) = me.do_install(&exe_url, &sha_url, &sig_url) {
                 me.set(UpState::Failed(e));
             }
         });
     }
 
-    fn do_install(&self, exe_url: &str, sha_url: &str) -> Result<(), &'static str> {
+    fn do_install(&self, exe_url: &str, sha_url: &str, sig_url: &str) -> Result<(), &'static str> {
         let ag = agent();
         // 1) empreinte attendue
         let sha_txt = ag.get(sha_url).call().map_err(|_| "up_net")?.into_string().map_err(|_| "up_net")?;
         let expected = parse_sha(&sha_txt).ok_or("up_bad")?;
+        // signature minisign (petit fichier texte, taille bornée)
+        let mut sig_txt = String::new();
+        ag.get(sig_url).call().map_err(|_| "up_net")?.into_reader().take(4096).read_to_string(&mut sig_txt).map_err(|_| "up_net")?;
         // 2) téléchargement (taille limitée)
         let resp = ag.get(exe_url).call().map_err(|_| "up_net")?;
         if !resp.get_url().starts_with("https://") {
@@ -203,6 +219,7 @@ impl Updater {
         // 3) vérifications
         let got: [u8; 32] = hasher.finalize().into();
         verify(&data, &got, &expected)?;
+        verify_sig(&data, &sig_txt, PUBKEY)?;
         // 4) remplacement : exe actuel → .old, nouveau → nom d'origine (retour arrière si échec)
         let exe = std::env::current_exe().map_err(|_| "up_io")?;
         swap_exe(&exe, &data)?;
@@ -229,13 +246,15 @@ mod tests {
 
     const REL: &str = r#"{"tag_name":"build-57","draft":false,"prerelease":false,"assets":[
         {"name":"AutoKey.exe","browser_download_url":"https://github.com/me/AutoKey/releases/download/build-57/AutoKey.exe"},
-        {"name":"AutoKey.exe.sha256","browser_download_url":"https://github.com/me/AutoKey/releases/download/build-57/AutoKey.exe.sha256"}]}"#;
+        {"name":"AutoKey.exe.sha256","browser_download_url":"https://github.com/me/AutoKey/releases/download/build-57/AutoKey.exe.sha256"},
+        {"name":"AutoKey.exe.minisig","browser_download_url":"https://github.com/me/AutoKey/releases/download/build-57/AutoKey.exe.minisig"}]}"#;
 
     #[test]
     fn newer_release_detected() {
         let r = parse_release(REL, "me/AutoKey", 42).unwrap();
         assert_eq!(r.0, 57);
         assert!(r.1.ends_with("/AutoKey.exe"));
+        assert!(r.3.ends_with("/AutoKey.exe.minisig"));
         assert!(parse_release(REL, "me/AutoKey", 57).is_none(), "même build : rien");
     }
 
@@ -244,6 +263,35 @@ mod tests {
         assert!(parse_release(REL, "pirate/AutoKey", 1).is_none());
         let evil = REL.replace("https://github.com/me", "https://evil.example/me");
         assert!(parse_release(&evil, "me/AutoKey", 1).is_none());
+    }
+
+    #[test]
+    fn release_without_minisig_rejected() {
+        let no_sig = REL.replace("AutoKey.exe.minisig\"", "autre.txt\"");
+        assert!(parse_release(&no_sig, "me/AutoKey", 1).is_none());
+    }
+
+    const FX_DATA: &[u8] = include_bytes!("../tests/fixtures/update/test.exe.bin");
+    const FX_SIG: &str = include_str!("../tests/fixtures/update/test.exe.bin.minisig");
+    const FX_PUB: &str = include_str!("../tests/fixtures/update/test.pub");
+
+    fn fx_key() -> &'static str {
+        FX_PUB.lines().nth(1).unwrap().trim()
+    }
+
+    #[test]
+    fn signature_valid() {
+        assert_eq!(&FX_DATA[..2], b"MZ");
+        assert!(verify_sig(FX_DATA, FX_SIG, fx_key()).is_ok());
+    }
+
+    #[test]
+    fn signature_rejects_tampering() {
+        let mut bad = FX_DATA.to_vec();
+        bad[100] ^= 1;
+        assert_eq!(verify_sig(&bad, FX_SIG, fx_key()), Err("up_bad"), "donnée modifiée");
+        assert_eq!(verify_sig(FX_DATA, FX_SIG, PUBKEY), Err("up_bad"), "mauvaise clé");
+        assert_eq!(verify_sig(FX_DATA, "n'importe quoi", fx_key()), Err("up_bad"), "signature illisible");
     }
 
     #[test]

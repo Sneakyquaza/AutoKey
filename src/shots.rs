@@ -23,7 +23,7 @@ pub fn init(app: &mut App) {
 fn setup(app: &App, ctx: &egui::Context, name: &str) {
     use crate::update::UpState;
     *app.updater().state.lock().unwrap() = match name {
-        "update" => UpState::Available { build: 58, exe_url: String::new(), sha_url: String::new() },
+        "update" => UpState::Available { build: 58, exe_url: String::new(), sha_url: String::new(), sig_url: String::new() },
         "update_dl" => UpState::Downloading(42),
         _ => UpState::Idle,
     };

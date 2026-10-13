@@ -17,6 +17,8 @@ serde_json = "1"
 # Mise à jour : HTTPS (rustls, 100 % Rust) + vérification SHA-256
 ureq = { version = "2.12", default-features = false, features = ["tls", "proxy-from-env"] }
 sha2 = "0.10"
+# Mise à jour : vérification de la signature minisign (pure Rust)
+minisign-verify = "0.2"
 # Compile aussi hors Windows (déclarations seules) : permet de vérifier le code Windows depuis Linux
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
