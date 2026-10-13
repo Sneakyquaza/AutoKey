@@ -1,6 +1,6 @@
 # AutoKey
 
-Auto-presser clavier Windows (Rust 2021, egui 0.29 rendu logiciel, winit 0.30). Un seul exe, sans admin, MAJ auto via GitHub Releases. UI FR/EN/PT. Version : `Cargo.toml` (3.1.0) ; release = tag `v<version>`.
+Auto-presser clavier Windows (Rust 2021, egui 0.29 rendu logiciel, winit 0.30). Un seul exe, sans admin, MAJ auto via GitHub Releases. UI FR/EN/PT. Version : `Cargo.toml` (3.2.0) ; release = tag `v<version>`.
 
 ## Workflow (budget serré — abonnement Pro)
 - Opus = orchestrateur : cadre, lit le minimum, découpe, relit le diff. N'écrit pas le code lui-même sauf micro-fix (< ~10 lignes).
@@ -11,7 +11,7 @@ Auto-presser clavier Windows (Rust 2021, egui 0.29 rendu logiciel, winit 0.30). 
 ## Carte
 - `src/` : code, voir `src/CLAUDE.md`.
 - `.github/` : CI/release, voir `.github/CLAUDE.md`.
-- `build.rs` : manifeste + ressources Windows (icône, version `3.1.0.<AUTOKEY_BUILD>`), Windows seulement.
+- `build.rs` : manifeste + ressources Windows (icône, version `<version>.<AUTOKEY_BUILD>`), Windows seulement.
 - `assets/` : `app.ico`, `icon64.rgba` (inclus par `main.rs`).
 
 ## Build / test (toolchain locale installée, Rust épinglé par `rust-toolchain.toml`)
