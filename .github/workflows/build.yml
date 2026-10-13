@@ -10,6 +10,7 @@ on:
       - "Cargo.lock"
       - "build.rs"
       - ".github/workflows/**"
+      - "!**/*.md"
   workflow_dispatch:
 
 # droits minimum : publier la release + attester la provenance de l'exe
