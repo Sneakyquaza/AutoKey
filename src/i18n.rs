@@ -237,7 +237,14 @@ mod tests {
 
     #[test]
     fn literal_keys_exist() {
-        let files = [("ui.rs", include_str!("ui.rs")), ("keys.rs", include_str!("keys.rs"))];
+        let files = [
+            ("ui/mod.rs", include_str!("ui/mod.rs")),
+            ("ui/chrome.rs", include_str!("ui/chrome.rs")),
+            ("ui/spam.rs", include_str!("ui/spam.rs")),
+            ("ui/pattern.rs", include_str!("ui/pattern.rs")),
+            ("ui/widgets.rs", include_str!("ui/widgets.rs")),
+            ("keys.rs", include_str!("keys.rs")),
+        ];
         let mut total = 0;
         for (name, src) in files {
             for k in used_keys(src) {

@@ -11,7 +11,12 @@ Modules déclarés à plat dans `main.rs`. Flux : `main` → `config::load` → 
 | `keys.rs` | `KeySpec` (vk + scan), labels localisés, tri/affichage combos, `RawKey` | `combo_label` |
 | `platform.rs` | Windows : `SendInput` scancodes, `GetAsyncKeyState`, timer haute résolution, coins arrondis DWM, dialogues `rfd`. Hors Windows : `NullKeyboard` + `AUTOKEY_STDIN_KEYS`. Marqueurs d'injection (`INJ`) pour ignorer nos propres touches | `keyboard`, `key_poll` |
 | `i18n.rs` | table statique `T: (clé, [fr,en,pt])`, `tr`/`trf` (`{x}`), formats nombres/durées | `tr`, `trf` |
-| `ui.rs` | toute l'UI dessinée à la main (palette consts l.15-33, widgets l.150-660, `Act` l.659, `App` l.672+, pages spam/pattern/timeline l.1073+). UI → actions `Act` appliquées dans `App::apply` | `App::update` |
+| `ui/mod.rs` | `Act`, `App` (new, `apply`, `update`, `draw`) ; UI → actions `Act` appliquées dans `App::apply` ; réexporte `BG`, `WIDTH`, `height_for`, `setup_fonts` | `App::update` |
+| `ui/theme.rs` | palette, `font`/`W`, `setup_fonts`, `WIDTH`/`height_for`, helpers couleur (`lerp_c`, `lighten`, `grad_rect`, `sk`, `kind_color`) | |
+| `ui/widgets.rs` | primitives de dessin et widgets à la main (`card`, `text*`, `Ic`/`icon`, boutons, `segmented`, `keycap`, `num_field`, `start_button`, `rhythm`) | |
+| `ui/chrome.rs` | `impl App` : barre de titre, popups langue/réglages, modal de confirmation, footer | |
+| `ui/spam.rs` | `impl App` : page spam, `hotkey_card`, `hotkey_hint`/`rec_label` | |
+| `ui/pattern.rs` | `impl App` : page pattern, `timeline`, `step_card` | |
 | `render.rs` | rasteriseur logiciel egui + redessin partiel (hash des shapes, rects sales fusionnés) | `Renderer::render` |
 | `update.rs` | MAJ depuis Releases (`AUTOKEY_REPO`/`AUTOKEY_BUILD` compile-time), filtre URL dépôt, ≤64 Mo, SHA-256, en-tête MZ, swap atomique + rollback | `Updater::spawn_checker/install` |
 | `shots.rs` | captures auto de scènes UI (feature `shots`) | `init`, `tick` |
