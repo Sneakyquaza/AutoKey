@@ -123,7 +123,7 @@ impl Default for PatternCfg {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub lang: Lang,
@@ -131,6 +131,26 @@ pub struct Settings {
     pub mode: Mode,
     pub spam: SpamCfg,
     pub pattern: PatternCfg,
+    /// Durée de maintien de chaque frappe (ms)
+    pub press_ms: f64,
+}
+
+/// Durée d'appui par défaut (ms)
+pub const DEFAULT_PRESS_MS: f64 = 20.0;
+/// Durée d'appui maximale (ms)
+pub const MAX_PRESS_MS: f64 = 500.0;
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            lang: Lang::default(),
+            pin: false,
+            mode: Mode::default(),
+            spam: SpamCfg::default(),
+            pattern: PatternCfg::default(),
+            press_ms: DEFAULT_PRESS_MS,
+        }
+    }
 }
 
 pub fn example_steps() -> Vec<Step> {
@@ -198,6 +218,7 @@ pub fn sanitize(s: &mut Settings) {
         s.spam.value = MIN_INTERVAL_S / s.spam.unit.factor();
     }
     s.spam.hotkey.truncate(6);
+    s.press_ms = clamp_f(s.press_ms, 0.0, MAX_PRESS_MS, DEFAULT_PRESS_MS);
     sanitize_pattern(&mut s.pattern);
 }
 
@@ -306,6 +327,17 @@ mod tests {
         s.spam.unit = Unit::Ms;
         sanitize(&mut s);
         assert_eq!(s.spam.value, 20.0);
+    }
+
+    #[test]
+    fn sanitize_press_ms() {
+        let mut s = Settings::default();
+        assert_eq!(s.press_ms, 20.0);
+        for (v, want) in [(-5.0, 0.0), (9999.0, 500.0), (f64::NAN, 20.0), (35.0, 35.0)] {
+            s.press_ms = v;
+            sanitize(&mut s);
+            assert_eq!(s.press_ms, want);
+        }
     }
 
     #[test]
