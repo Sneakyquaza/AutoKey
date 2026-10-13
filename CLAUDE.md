@@ -1,11 +1,11 @@
 # AutoKey
 
-Auto-presser clavier Windows (Rust 2021, egui 0.29 rendu logiciel, winit 0.30). Un seul exe, sans admin, MAJ auto via GitHub Releases. UI FR/EN/PT. Version : `Cargo.toml` (3.1.0).
+Auto-presser clavier Windows (Rust 2021, egui 0.29 rendu logiciel, winit 0.30). Un seul exe, sans admin, MAJ auto via GitHub Releases. UI FR/EN/PT. Version : `Cargo.toml` (3.1.0) ; release = tag `v<version>`.
 
 ## Workflow (budget serré — abonnement Pro)
 - Opus = orchestrateur : cadre, lit le minimum, découpe, relit le diff. N'écrit pas le code lui-même sauf micro-fix (< ~10 lignes).
 - Implémentation → agent `code-implementer` (Sonnet). Lui passer : fichiers exacts, fonctions visées, critères d'acceptation, contraintes. Pas de contexte superflu.
-- Lire par plages (`grep -n` puis `sed -n a,bp`), jamais un gros fichier entier (`src/ui.rs` = 1400 l.).
+- Lire par plages (`grep -n` puis `sed -n a,bp`), jamais un gros fichier entier (`src/ui/widgets.rs` 500 l., `render.rs` 590 l.).
 - Skill `/cloture-session` (MAJ CLAUDE.md + commit) : seulement quand l'utilisateur dit vouloir clôturer / arrêter / clear. Jamais spontanément.
 
 ## Carte
@@ -14,13 +14,14 @@ Auto-presser clavier Windows (Rust 2021, egui 0.29 rendu logiciel, winit 0.30). 
 - `build.rs` : manifeste + ressources Windows (icône, version `3.1.0.<AUTOKEY_BUILD>`), Windows seulement.
 - `assets/` : `app.ico`, `icon64.rgba` (inclus par `main.rs`).
 
-## Build / test
-- Pas de toolchain Rust sur la machine locale → vérif réelle = CI (windows-latest).
-- Si cargo dispo : `cargo test` (tourne aussi sous Linux : `NullKeyboard`), `cargo check --features wincheck` (vérifie le code Windows depuis Linux).
-- Features : `wincheck` (contrôle code Win hors Windows), `shots` (captures UI dev, `AUTOKEY_SHOTS=dossier`).
+## Build / test (toolchain locale installée, Rust épinglé par `rust-toolchain.toml`)
+- Avant commit : `cargo fmt --check`, `cargo clippy --locked --all-targets --features shots -- -D warnings`, idem `--target x86_64-pc-windows-gnu` (vérifie le code Windows), `cargo test --locked`. Même chose en CI.
+- Exe Windows local : `cargo build --release --target x86_64-pc-windows-gnu`.
+- UI : `scripts/ui-shots.sh DOSSIER [REF]` → captures PNG des scènes (`src/shots.rs`) sous Xvfb ; avec REF, comparaison au pixel près (refactor UI = 0 diff).
+- Pas de Windows ici : comportement clavier réel non testable, seulement compilé.
 
 ## Règles
-- ⚠️ Push sur `main` touchant `src/**`, `Cargo.*`, `build.rs`, `assets/**`, workflows = build + release publique + MAJ auto chez les utilisateurs. Ne jamais push sans accord explicite.
+- ⚠️ Release publique + MAJ auto chez tous les utilisateurs = tag `v*` poussé ou lancement manuel de `build.yml`. Ne jamais tagger/pousser sans accord explicite. Push de branche = CI seule.
 - Commits : Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`, `ci:`), message en français ok.
-- Sécurité non négociable : jamais d'élévation admin, réseau limité aux Releases du dépôt, vérif SHA-256 des MAJ.
+- Sécurité non négociable : jamais d'élévation admin, réseau limité aux Releases du dépôt, MAJ vérifiées (SHA-256 + signature minisign).
 - Textes UI : toujours via `i18n` (3 langues), jamais en dur.
