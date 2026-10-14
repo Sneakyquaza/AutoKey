@@ -25,3 +25,7 @@ Auto-presser clavier Windows (Rust 2021, egui 0.29 rendu logiciel, winit 0.30). 
 - Commits : Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`, `ci:`), message en français ok.
 - Sécurité non négociable : jamais d'élévation admin, réseau limité aux Releases du dépôt, MAJ vérifiées (SHA-256 + signature minisign).
 - Textes UI : toujours via `i18n` (3 langues), jamais en dur.
+
+## En cours
+- 3.2.0 (build-14) publiée le 2026-10-13 sans test sur vrai Windows : attendre retour utilisateur (spam, pattern, F6/F7/F8, popup réglages, instance unique). Bug → fix sur `main` + 3.2.1.
+- Pistes non faites : icône zone de notification, combos/clics souris dans patterns, profils, signature Authenticode.

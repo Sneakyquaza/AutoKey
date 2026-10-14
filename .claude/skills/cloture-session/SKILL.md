@@ -26,7 +26,7 @@ Pour chaque fichier concerné :
 - `git add -A` puis vérifier `git status` (aucun binaire, `target/`, secret).
 - Un commit par sujet logique si le diff mélange plusieurs choses, sinon un seul.
 - Format Conventional Commits : `type(scope): description` — types `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `ci`, `chore` ; scope = module (`ui`, `engine`, `update`…). Corps optionnel : le pourquoi. Màj seule des CLAUDE.md → `docs(claude): …`.
-- Ne pas push (un push sur `main` publie une release). Le proposer à l'utilisateur.
+- Ne pas push ni tagger sans accord (push = CI seule ; tag `v*` = release publique). Le proposer à l'utilisateur.
 
 ## 4. Rapport (3 lignes max)
 Commits créés, CLAUDE.md modifiés, état `## En cours`. Puis : « Tu peux faire `/clear`. »
