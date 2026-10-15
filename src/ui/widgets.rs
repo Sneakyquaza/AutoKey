@@ -330,6 +330,76 @@ pub(super) fn segmented<T: PartialEq + Copy>(ui: &mut Ui, r: Rect, id: Id, items
     changed
 }
 
+/// Petit « i » d'aide centré en `center` : info-bulle (fond SURFACE, bord LINE2, ≤ 260 px, retour à la ligne) au survol.
+/// Peinte sur la couche `Tooltip`, bornée à la fenêtre (sous le « i », sinon au-dessus ; décalée à gauche près du bord).
+pub(super) fn info_tip(ui: &mut Ui, center: Pos2, id: Id, tip: &str) {
+    const R: f32 = 7.0;
+    let resp = ui.interact(Rect::from_center_size(center, Vec2::splat(R * 2.0 + 4.0)), id, Sense::hover());
+    let hov = resp.hovered();
+    #[cfg(feature = "shots")]
+    let hov = hov || ui.ctx().data(|d| d.get_temp::<Id>(Id::new("force_tip"))) == Some(id);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::Help);
+    }
+    let p = ui.painter();
+    p.circle(center, R, if hov { SURFACE2 } else { Color32::TRANSPARENT }, sk(1.0, if hov { MUTED } else { LINE2 }));
+    text(p, pos2(center.x, center.y + 0.5), Align2::CENTER_CENTER, "i", 10.0, W::B, if hov { TEXT } else { MUTED });
+    if !hov || tip.is_empty() {
+        return;
+    }
+    let tp = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, id.with("tip")));
+    let job = egui::text::LayoutJob::simple(tip.to_string(), font(12.0, W::R), TEXT, 260.0 - 24.0);
+    let g = tp.layout_job(job);
+    let size = g.size() + vec2(24.0, 20.0);
+    let screen = ui.ctx().screen_rect();
+    let mut x = center.x - 14.0;
+    x = x.min(screen.max.x - 6.0 - size.x).max(screen.min.x + 6.0);
+    let mut y = center.y + R + 6.0;
+    if y + size.y > screen.max.y - 6.0 {
+        y = (center.y - R - 6.0 - size.y).max(screen.min.y + 6.0);
+    }
+    let r = Rect::from_min_size(pos2(x, y), size);
+    tp.rect_filled(r.translate(vec2(0.0, 4.0)).expand(1.0), 10.0, Color32::from_black_alpha(90));
+    tp.rect(r, 10.0, SURFACE, sk(1.0, LINE2));
+    tp.galley(r.min + vec2(12.0, 10.0), g, TEXT);
+}
+
+/// Bouton texte rectangulaire (actions des paramètres) ; `danger` = liseré rose
+pub(super) fn pill_btn(ui: &mut Ui, r: Rect, id: Id, label: &str, danger: bool, enabled: bool) -> bool {
+    let resp = ui.interact(r, id, if enabled { Sense::click() } else { Sense::hover() });
+    let hov = enabled && resp.hovered();
+    if hov {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    let accent = if danger { ROSE } else { VIOLET };
+    let p = ui.painter();
+    p.rect(r, 10.0, SURFACE2, sk(1.0, if hov { accent } else { LINE2 }));
+    let label = fit_text(p, label, 13.0, W::S, r.width() - 16.0);
+    let col = if !enabled {
+        DIM
+    } else if danger {
+        lighten(ROSE, 0.15)
+    } else {
+        TEXT
+    };
+    text(p, r.center(), Align2::CENTER_CENTER, &label, 13.0, W::S, col);
+    enabled && resp.clicked()
+}
+
+/// Version grisée (non interactive) d'un interrupteur Non / Oui
+pub(super) fn toggle_off(p: &Painter, r: Rect, on: bool, labels: [&str; 2], size: f32) {
+    p.rect(r, 10.0, SURFACE, sk(1.0, LINE));
+    let inner = r.shrink(3.0);
+    let bw = inner.width() / 2.0;
+    for (i, l) in labels.iter().enumerate() {
+        let br = Rect::from_min_size(pos2(inner.min.x + i as f32 * bw, inner.min.y), vec2(bw, inner.height()));
+        if (i == 1) == on {
+            p.rect_filled(br, 7.0, SURFACE2);
+        }
+        text(p, br.center(), Align2::CENTER_CENTER, l, size, W::S, DIM);
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum CapSize {
     Big,

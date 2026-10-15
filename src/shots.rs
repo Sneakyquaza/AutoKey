@@ -12,7 +12,7 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 18] = [
+const SCENES: [&str; 25] = [
     "spam_fr",
     "spam_rec_en",
     "pattern_empty",
@@ -23,9 +23,16 @@ const SCENES: [&str; 18] = [
     "modal",
     "update",
     "update_dl",
-    "settings",
+    "settings_fr",
+    "settings_fr_bottom",
+    "settings_tip_fr",
     "spam_limit_pt",
     "settings_pt",
+    "settings_pt_mid",
+    "settings_pt_bottom",
+    "settings_compact_en",
+    "settings_compact_en_bottom",
+    "settings_tip_compact_pt",
     "profiles_pt",
     "profiles_en",
     "macro_rec_pt",
@@ -46,6 +53,7 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
         "update_dl" => UpState::Downloading(42),
         _ => UpState::Idle,
     };
+    *app.updater().check.lock().unwrap() = if name == "settings_pt_mid" { crate::update::Check::UpToDate } else { crate::update::Check::Idle };
     let sh = app.shared();
     sh.runner.stop();
     sh.cancel_record();
@@ -98,18 +106,29 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
             s = sh.settings.lock().unwrap();
         }
         "update" | "update_dl" => s.mode = Mode::Spam,
-        "settings" => s.mode = Mode::Spam,
+        "settings_fr" | "settings_fr_bottom" | "settings_tip_fr" => s.mode = Mode::Spam,
+        "settings_compact_en" | "settings_compact_en_bottom" => {
+            s.mode = Mode::Spam;
+            s.lang = Lang::En;
+            s.compact = true;
+        }
+        "settings_tip_compact_pt" => {
+            s.mode = Mode::Spam;
+            s.lang = Lang::Pt;
+            s.compact = true;
+        }
         "spam_limit_pt" => {
             s.mode = Mode::Spam;
             s.lang = Lang::Pt;
             s.spam.limit = config::SpamLimit::Duration(90.0);
         }
-        "settings_pt" => {
+        "settings_pt" | "settings_pt_mid" | "settings_pt_bottom" => {
             s.mode = Mode::Spam;
             s.lang = Lang::Pt;
             s.jitter_pct = 15.0;
             s.beep = true;
             s.bind_window = true;
+            s.tray = true;
         }
         "paused_pt" => {
             s.mode = Mode::Spam;
@@ -189,10 +208,24 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             app.open_confirm_for_shots(false);
             app.open_settings_for_shots(false);
             app.open_profiles_for_shots(false);
+            app.force_tip_for_shots(ctx, None);
             setup(app, ctx, SCENES[st.scene]);
         }
         if SCENES[st.scene].starts_with("settings") && st.frame == 1 {
             app.open_settings_for_shots(true);
+            match SCENES[st.scene] {
+                "settings_pt_mid" => app.scroll_settings_for_shots(440.0),
+                n if n.ends_with("_bottom") => app.scroll_settings_for_shots(10_000.0),
+                "settings_tip_fr" => {
+                    app.scroll_settings_for_shots(0.0);
+                    app.force_tip_for_shots(ctx, Some("jitter"));
+                }
+                "settings_tip_compact_pt" => {
+                    app.scroll_settings_for_shots(0.0);
+                    app.force_tip_for_shots(ctx, Some("bind"));
+                }
+                _ => app.scroll_settings_for_shots(0.0),
+            }
         }
         if SCENES[st.scene].starts_with("profiles") && st.frame == 1 {
             app.open_profiles_for_shots(true);

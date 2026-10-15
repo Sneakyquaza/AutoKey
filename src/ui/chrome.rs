@@ -143,6 +143,10 @@ impl App {
             s.compact = false;
             acts.push(Act::Resize(s.mode, false));
         }
+        x -= 38.0;
+        if icon_btn(ui, br(x), "gearbtn", Ic::Gear, tr(lang, "settings"), self.settings_open, false).clicked() {
+            self.settings_open = !self.settings_open;
+        }
     }
 
     /// Vue réduite : mode, raccourci, démarrer / arrêter (l'état est dans le pied de page)
@@ -205,60 +209,6 @@ impl App {
         let clicked_out = ui.input(|i| i.pointer.any_pressed()) && !inside && !lr_hover;
         if clicked_out {
             self.lang_open = false;
-        }
-    }
-
-    pub(super) fn settings_popup(&mut self, ui: &mut Ui, full: Rect, s: &mut Settings, rec: &Option<Recording>, acts: &mut Vec<Act>) {
-        let lang = s.lang;
-        let gear_right = full.max.x - 12.0 - 34.0 - 38.0 - 38.0;
-        let r = Rect::from_min_size(pos2(gear_right - 300.0, full.min.y + 52.0), vec2(300.0, 6.0 * 50.0 + 12.0));
-        let p = ui.painter().clone();
-        p.rect_filled(r.translate(vec2(0.0, 6.0)).expand(2.0), 14.0, Color32::from_black_alpha(90));
-        p.rect(r, 12.0, SURFACE, sk(1.0, LINE2));
-        let blocker = ui.interact(r, Id::new("setpop"), Sense::click());
-        let mut inside = blocker.hovered();
-        let row = |i: f32| r.min.y + 6.0 + i * 50.0 + 25.0;
-        // durée d'appui
-        text(&p, pos2(r.min.x + 16.0, row(0.0)), Align2::LEFT_CENTER, tr(lang, "press_dur"), 13.0, W::S, TEXT);
-        let nr = Rect::from_center_size(pos2(r.max.x - 16.0 - 40.0 - 22.0, row(0.0)), vec2(80.0, 36.0));
-        num_field(ui, nr, Id::new("pressms"), &mut s.press_ms, 0.0, config::MAX_PRESS_MS, true, 16.0, true, lang);
-        inside |= ui.rect_contains_pointer(nr);
-        text(&p, pos2(nr.max.x + 8.0, row(0.0)), Align2::LEFT_CENTER, "ms", 12.0, W::S, MUTED);
-        // aléa sur les délais
-        text(&p, pos2(r.min.x + 16.0, row(1.0)), Align2::LEFT_CENTER, tr(lang, "jitter"), 13.0, W::S, TEXT);
-        let jr = Rect::from_center_size(pos2(r.max.x - 16.0 - 40.0 - 22.0, row(1.0)), vec2(80.0, 36.0));
-        num_field(ui, jr, Id::new("jitterpct"), &mut s.jitter_pct, 0.0, config::MAX_JITTER_PCT, true, 16.0, true, lang);
-        inside |= ui.rect_contains_pointer(jr);
-        text(&p, pos2(jr.max.x + 8.0, row(1.0)), Align2::LEFT_CENTER, "%", 12.0, W::S, MUTED);
-        // bip démarrage / arrêt
-        text(&p, pos2(r.min.x + 16.0, row(2.0)), Align2::LEFT_CENTER, tr(lang, "beep"), 13.0, W::S, TEXT);
-        let br = Rect::from_center_size(pos2(r.max.x - 16.0 - 45.0, row(2.0)), vec2(90.0, 36.0));
-        segmented(ui, br, Id::new("beep"), &[(false, tr(lang, "off").into()), (true, tr(lang, "on").into())], &mut s.beep, 13.0, false);
-        inside |= ui.rect_contains_pointer(br);
-        // liaison à la fenêtre cible
-        text(&p, pos2(r.min.x + 16.0, row(3.0)), Align2::LEFT_CENTER, tr(lang, "bind_win"), 13.0, W::S, TEXT);
-        let wr = Rect::from_center_size(pos2(r.max.x - 16.0 - 45.0, row(3.0)), vec2(90.0, 36.0));
-        segmented(ui, wr, Id::new("bindwin"), &[(false, tr(lang, "off").into()), (true, tr(lang, "on").into())], &mut s.bind_window, 13.0, false);
-        inside |= ui.rect_contains_pointer(wr);
-        // icône zone de notification
-        text(&p, pos2(r.min.x + 16.0, row(4.0)), Align2::LEFT_CENTER, tr(lang, "tray"), 13.0, W::S, TEXT);
-        ui.interact(Rect::from_center_size(pos2(r.min.x + 100.0, row(4.0)), vec2(170.0, 36.0)), Id::new("traytip"), Sense::hover())
-            .on_hover_text(tr(lang, "tray_tip"));
-        let tr_r = Rect::from_center_size(pos2(r.max.x - 16.0 - 45.0, row(4.0)), vec2(90.0, 36.0));
-        segmented(ui, tr_r, Id::new("tray"), &[(false, tr(lang, "off").into()), (true, tr(lang, "on").into())], &mut s.tray, 13.0, false);
-        inside |= ui.rect_contains_pointer(tr_r);
-        // arrêt d'urgence
-        text(&p, pos2(r.min.x + 16.0, row(5.0)), Align2::LEFT_CENTER, tr(lang, "stop_hk"), 13.0, W::S, TEXT);
-        let (lbl, recording) = Self::rec_label(s, rec, Target::StopHotkey, combo_label(&s.stop_hotkey, lang));
-        let cr = Rect::from_center_size(pos2(r.max.x - 16.0 - 60.0, row(5.0)), vec2(120.0, 36.0));
-        let resp = keycap(ui, cr, Id::new("stophk"), &lbl, recording, CapSize::Mid, lang, true).on_hover_text(tr(lang, "click_change"));
-        inside |= resp.hovered();
-        if resp.clicked() {
-            acts.push(Act::Record(Target::StopHotkey));
-        }
-        let btn_hover = ui.ctx().read_response(Id::new("gearbtn")).map(|r| r.hovered()).unwrap_or(false);
-        if ui.input(|i| i.pointer.any_pressed()) && !inside && !btn_hover {
-            self.settings_open = false;
         }
     }
 
@@ -382,13 +332,19 @@ impl App {
         ui.interact(full, Id::new("modal_block"), Sense::click());
         let r = Rect::from_center_size(full.center(), vec2(380.0, 160.0));
         p.rect(r, 18.0, SURFACE, sk(1.0, LINE2));
-        icon(&p, Ic::Trash, pos2(r.center().x, r.min.y + 36.0), 28.0, ROSE);
+        icon(&p, if self.confirm_reset { Ic::Gear } else { Ic::Trash }, pos2(r.center().x, r.min.y + 36.0), 28.0, ROSE);
         let msg = match self.confirm_profile.and_then(|i| s.profiles.get(i)) {
+            _ if self.confirm_reset => tr(lang, "reset_q").to_string(),
             _ if self.confirm_macro.is_some() => tr(lang, "macro_replace_q").to_string(),
             Some(pf) => fit_text(&p, &trf(lang, "prof_del_q", &[("name", pf.name.clone())]), 15.0, W::S, r.width() - 32.0),
             None => tr(lang, "clear_q").to_string(),
         };
-        text(&p, pos2(r.center().x, r.min.y + 78.0), Align2::CENTER_CENTER, &msg, 15.0, W::S, TEXT);
+        if self.confirm_reset {
+            text(&p, pos2(r.center().x, r.min.y + 70.0), Align2::CENTER_CENTER, &msg, 15.0, W::S, TEXT);
+            text(&p, pos2(r.center().x, r.min.y + 92.0), Align2::CENTER_CENTER, tr(lang, "reset_note"), 12.0, W::R, MUTED);
+        } else {
+            text(&p, pos2(r.center().x, r.min.y + 78.0), Align2::CENTER_CENTER, &msg, 15.0, W::S, TEXT);
+        }
         let bw = 150.0;
         let y = r.max.y - 26.0 - 36.0 + 18.0;
         let cancel = Rect::from_min_size(pos2(r.center().x - bw - 6.0, y - 18.0), vec2(bw, 36.0));
@@ -398,14 +354,16 @@ impl App {
         p.rect(cancel, 10.0, SURFACE2, sk(1.0, if rc.hovered() { VIOLET } else { LINE2 }));
         text(&p, cancel.center(), Align2::CENTER_CENTER, tr(lang, "cancel"), 13.0, W::S, TEXT);
         p.rect_filled(del, 10.0, if rd.hovered() { lighten(ROSE, 0.12) } else { ROSE });
-        text(&p, del.center(), Align2::CENTER_CENTER, tr(lang, "yes"), 13.0, W::S, Color32::WHITE);
+        text(&p, del.center(), Align2::CENTER_CENTER, tr(lang, if self.confirm_reset { "reset_yes" } else { "yes" }), 13.0, W::S, Color32::WHITE);
         if rc.clicked() {
             self.confirm_clear = false;
+            self.confirm_reset = false;
             self.confirm_profile = None;
             self.confirm_macro = None;
         }
         if rd.clicked() {
             match self.confirm_profile.take() {
+                _ if self.confirm_reset => acts.push(Act::ResetSettings),
                 Some(i) => acts.push(Act::ProfileDelete(i)),
                 None if self.confirm_macro.is_some() => {
                     s.pattern.steps = self.confirm_macro.take().unwrap_or_default();
@@ -417,6 +375,7 @@ impl App {
                 }
             }
             self.confirm_clear = false;
+            self.confirm_reset = false;
         }
     }
 
@@ -479,7 +438,7 @@ impl App {
         if let Some((k, t)) = *flash {
             if t.elapsed() < Duration::from_secs(3) {
                 msg = tr(lang, k).to_string();
-                col = if k == "saved" { GREEN } else { AMBER };
+                col = if matches!(k, "saved" | "cfg_exported" | "cfg_imported" | "cfg_reset") { GREEN } else { AMBER };
             } else {
                 *flash = None;
             }

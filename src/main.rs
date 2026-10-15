@@ -43,6 +43,27 @@ struct Gfx {
     size: (u32, u32),
 }
 
+/// Démarrage caché : délai max. d'attente de l'icône (ajoutée de façon asynchrone) avant de montrer la fenêtre
+const TRAY_WAIT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, PartialEq)]
+enum Startup {
+    Wait,
+    Stay,
+    Show,
+}
+
+/// Fenêtre cachée au démarrage : jamais d'application invisible sans icône pour la rouvrir
+fn startup_hidden(tray_active: bool, waited: Duration) -> Startup {
+    if tray_active {
+        Startup::Stay
+    } else if waited >= TRAY_WAIT {
+        Startup::Show
+    } else {
+        Startup::Wait
+    }
+}
+
 struct Runner {
     ctx: egui::Context,
     app: ui::App,
@@ -50,6 +71,8 @@ struct Runner {
     renderer: render::Renderer,
     vinfo: egui::ViewportInfo,
     next_frame: Option<Instant>,
+    /// Démarrage caché en cours (instant de départ) : en attente de l'icône de notification
+    hidden_since: Option<Instant>,
     last_frame: Instant,
     frames: u64,
     shot_pending: bool,
@@ -122,11 +145,25 @@ impl Runner {
             }
         }
         if first {
-            g.window.set_visible(true);
+            if self.hidden_since.is_none() {
+                g.window.set_visible(true);
+            }
             platform::after_window_shown(&g.window);
             // une fois visible, on ré-affiche tout au prochain passage
             self.full_present = true;
             sched(&mut self.next_frame, Duration::from_millis(50));
+        }
+
+        if let Some(t0) = self.hidden_since {
+            match startup_hidden(platform::tray_active(), t0.elapsed()) {
+                Startup::Wait => sched(&mut self.next_frame, Duration::from_millis(200)),
+                Startup::Stay => self.hidden_since = None,
+                Startup::Show => {
+                    g.window.set_visible(true);
+                    self.hidden_since = None;
+                    self.full_present = true;
+                }
+            }
         }
 
         // commandes de fenêtre (déplacement, taille, réduire, fermer…)
@@ -290,12 +327,13 @@ fn main() {
     }));
     let settings = config::load();
     let (mode, pin, compact) = (settings.mode, settings.pin, settings.compact);
+    let (auto_check, hide_at_start) = (settings.auto_check_updates, settings.tray && settings.start_minimized);
 
     let shared = control::Shared::new(settings, platform::keyboard());
     platform::start_test_input();
     control::spawn_poller(shared.clone());
     let updater = update::Updater::new(shared.clone());
-    updater.spawn_checker();
+    updater.spawn_checker(auto_check);
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
     let proxy = event_loop.create_proxy();
@@ -326,6 +364,7 @@ fn main() {
         renderer: render::Renderer::new(ui::BG),
         vinfo: Default::default(),
         next_frame: None,
+        hidden_since: hide_at_start.then(Instant::now),
         last_frame: Instant::now() - MIN_FRAME,
         frames: 0,
         shot_pending: false,
@@ -337,4 +376,17 @@ fn main() {
     };
     let _ = &runner.proxy;
     let _ = event_loop.run_app(&mut runner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_start_never_leaves_an_invisible_app() {
+        assert_eq!(startup_hidden(true, Duration::ZERO), Startup::Stay);
+        assert_eq!(startup_hidden(false, Duration::from_millis(500)), Startup::Wait);
+        assert_eq!(startup_hidden(false, TRAY_WAIT), Startup::Show);
+        assert_eq!(startup_hidden(true, Duration::from_secs(10)), Startup::Stay);
+    }
 }

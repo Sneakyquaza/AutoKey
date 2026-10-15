@@ -31,8 +31,18 @@ pub enum UpState {
     Restarting,
 }
 
+/// Résultat de la vérification manuelle (panneau Paramètres)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Check {
+    Idle,
+    Busy,
+    UpToDate,
+    Failed(&'static str),
+}
+
 pub struct Updater {
     pub state: Mutex<UpState>,
+    pub check: Mutex<Check>,
     pub quit: AtomicBool,
     sh: Arc<Shared>,
 }
@@ -132,7 +142,7 @@ pub fn swap_exe(exe: &Path, data: &[u8]) -> Result<(), &'static str> {
 
 impl Updater {
     pub fn new(sh: Arc<Shared>) -> Arc<Self> {
-        Arc::new(Updater { state: Mutex::new(UpState::Idle), quit: AtomicBool::new(false), sh })
+        Arc::new(Updater { state: Mutex::new(UpState::Idle), check: Mutex::new(Check::Idle), quit: AtomicBool::new(false), sh })
     }
 
     pub fn state(&self) -> UpState {
@@ -144,29 +154,60 @@ impl Updater {
         self.sh.repaint();
     }
 
-    /// Vérifie au démarrage puis toutes les 6 h ; nettoie l'ancien exe après une mise à jour.
-    pub fn spawn_checker(self: &Arc<Self>) {
+    /// Interroge /releases/latest : `Some(..)` si une version plus récente existe
+    #[allow(clippy::type_complexity)]
+    fn fetch_latest(repo: &str) -> Result<Option<(u64, String, String, String)>, &'static str> {
+        let url = format!("https://api.github.com/repos/{repo}/releases/latest");
+        let resp = agent().get(&url).set("Accept", "application/vnd.github+json").call().map_err(|_| "up_net")?;
+        let body = resp.into_string().map_err(|_| "up_net")?;
+        Ok(parse_release(&body, repo, current_build()))
+    }
+
+    /// Nettoie l'ancien exe après une mise à jour ; si `auto`, vérifie au démarrage puis toutes les 6 h.
+    pub fn spawn_checker(self: &Arc<Self>, auto: bool) {
         let me = self.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(4));
             if let Ok(exe) = std::env::current_exe() {
                 let _ = std::fs::remove_file(old_path(&exe));
             }
-            let (Some(repo), true) = (REPO, current_build() > 0) else { return };
+            let (Some(repo), true, true) = (REPO, current_build() > 0, auto) else { return };
             loop {
                 if matches!(me.state(), UpState::Idle | UpState::Failed(_)) {
-                    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-                    let resp = agent().get(&url).set("Accept", "application/vnd.github+json").call();
-                    if let Ok(r) = resp {
-                        if let Ok(body) = r.into_string() {
-                            if let Some((build, exe_url, sha_url, sig_url)) = parse_release(&body, repo, current_build()) {
-                                me.set(UpState::Available { build, exe_url, sha_url, sig_url });
-                            }
-                        }
+                    if let Ok(Some((build, exe_url, sha_url, sig_url))) = Self::fetch_latest(repo) {
+                        me.set(UpState::Available { build, exe_url, sha_url, sig_url });
                     }
                 }
                 std::thread::sleep(Duration::from_secs(6 * 3600));
             }
+        });
+    }
+
+    /// Vérification à la demande (bouton « Vérifier maintenant »), résultat dans `check`
+    pub fn check_now(self: &Arc<Self>) {
+        {
+            let mut c = self.check.lock().unwrap();
+            if *c == Check::Busy || !matches!(self.state(), UpState::Idle | UpState::Failed(_)) {
+                return;
+            }
+            *c = Check::Busy;
+        }
+        let me = self.clone();
+        std::thread::spawn(move || {
+            let res = match REPO {
+                Some(repo) if current_build() > 0 => Self::fetch_latest(repo),
+                _ => Err("up_na"),
+            };
+            let c = match res {
+                Ok(Some((build, exe_url, sha_url, sig_url))) => {
+                    me.set(UpState::Available { build, exe_url, sha_url, sig_url });
+                    Check::Idle
+                }
+                Ok(None) => Check::UpToDate,
+                Err(e) => Check::Failed(e),
+            };
+            *me.check.lock().unwrap() = c;
+            me.sh.repaint();
         });
     }
 

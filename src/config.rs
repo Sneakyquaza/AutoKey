@@ -166,6 +166,10 @@ pub struct Settings {
     pub tray: bool,
     /// Vue réduite (mode, touche, démarrer/arrêter, état)
     pub compact: bool,
+    /// Démarrer caché dans la zone de notification (sans effet si l'icône est désactivée)
+    pub start_minimized: bool,
+    /// Vérifier les mises à jour au démarrage (puis toutes les 6 h)
+    pub auto_check_updates: bool,
 }
 
 /// Configuration nommée : seuls la touche/cadence du spam et le pattern sont rechargés,
@@ -205,8 +209,15 @@ impl Default for Settings {
             active_profile: None,
             tray: false,
             compact: false,
+            start_minimized: false,
+            auto_check_updates: true,
         }
     }
+}
+
+/// Réglages par défaut, en conservant les profils et la langue (réinitialisation depuis le panneau Paramètres)
+pub fn reset_keep_profiles(s: &Settings) -> Settings {
+    Settings { profiles: s.profiles.clone(), active_profile: s.active_profile, lang: s.lang, ..Settings::default() }
 }
 
 pub fn example_steps() -> Vec<Step> {
@@ -222,21 +233,26 @@ pub fn cycle_seconds(steps: &[Step]) -> f64 {
     steps.iter().map(|s| s.duration()).sum()
 }
 
-fn config_path() -> PathBuf {
+/// Dossier de configuration (`%APPDATA%\AutoKey`)
+pub fn config_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         home.join(".config")
     });
-    base.join("AutoKey").join("config3.json")
+    base.join("AutoKey")
 }
 
-const MAX_FILE: u64 = 1024 * 1024;
+fn config_path() -> PathBuf {
+    config_dir().join("config3.json")
+}
+
+pub const MAX_FILE: u64 = 1024 * 1024;
 pub const MAX_STEPS: usize = 500;
 /// Intervalle minimum du spam (10 ms)
 pub const MIN_INTERVAL_S: f64 = 0.010;
 
 /// Lecture bornée : fichier ≤ 1 Mo, sinon ignoré
-fn read_small(p: &std::path::Path) -> Option<String> {
+pub fn read_small(p: &std::path::Path) -> Option<String> {
     let meta = std::fs::metadata(p).ok()?;
     if !meta.is_file() || meta.len() > MAX_FILE {
         return None;
@@ -534,6 +550,34 @@ mod tests {
         let s = load_from(&t.file());
         assert!(s.tray && s.compact);
         assert!(!Settings::default().tray && !Settings::default().compact);
+    }
+
+    #[test]
+    fn start_minimized_and_auto_check_defaults_and_compat() {
+        let t = Tmp::new();
+        // config 3.3.1 : sans les nouveaux champs
+        std::fs::write(t.file(), r#"{"pin":true,"tray":true,"compact":false,"jitter_pct":5.0}"#).unwrap();
+        let s = load_from(&t.file());
+        assert!(!s.start_minimized);
+        assert!(s.auto_check_updates);
+        assert!(s.pin && s.tray);
+        std::fs::write(t.file(), r#"{"start_minimized":true,"auto_check_updates":false}"#).unwrap();
+        let s = load_from(&t.file());
+        assert!(s.start_minimized && !s.auto_check_updates);
+        let d = Settings::default();
+        assert!(!d.start_minimized && d.auto_check_updates);
+    }
+
+    #[test]
+    fn reset_keeps_profiles_and_lang() {
+        let mut s = Settings { pin: true, press_ms: 99.0, tray: true, auto_check_updates: false, lang: Lang::Pt, ..Settings::default() };
+        s.profiles.push(Profile { name: "A".into(), ..Default::default() });
+        s.active_profile = Some(0);
+        let r = reset_keep_profiles(&s);
+        assert_eq!(r.profiles, s.profiles);
+        assert_eq!(r.active_profile, Some(0));
+        assert_eq!(r.lang, Lang::Pt); // la langue est conservée
+        assert_eq!(Settings { profiles: vec![], active_profile: None, lang: Lang::default(), ..r }, Settings::default());
     }
 
     #[test]

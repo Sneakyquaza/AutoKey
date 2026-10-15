@@ -284,6 +284,37 @@ impl Shared {
         hotkeys.iter().any(|(o, h)| *o != t && same(h, keys)) || action_keys.into_iter().any(|k| has(keys, k.vk))
     }
 
+    // ---------------------------------------------------------------- import / réinitialisation
+    /// Configuration complète importée : ≤ 1 Mo, JSON valide, bornée par `sanitize`, sans conflit de raccourcis
+    pub fn parse_import(txt: &str) -> Result<Settings, &'static str> {
+        if txt.len() as u64 > config::MAX_FILE {
+            return Err("bad_file");
+        }
+        let mut s: Settings = serde_json::from_str(txt).map_err(|_| "bad_file")?;
+        config::sanitize(&mut s);
+        let hk = [(Target::SpamHotkey, &s.spam.hotkey), (Target::PatHotkey, &s.pattern.hotkey), (Target::StopHotkey, &s.stop_hotkey)];
+        let hk_bad = hk.iter().any(|(t, k)| Self::conflicts(&s, *t, k));
+        let keys = std::iter::once(&s.spam.key).chain(s.pattern.steps.iter().filter_map(|st| match st {
+            Step::Hold { key, .. } | Step::Press { key, .. } => Some(key),
+            Step::Wait { .. } => None,
+        }));
+        let key_bad = keys.into_iter().any(|k| Self::conflicts(&s, Target::SpamKey, std::slice::from_ref(k)));
+        if hk_bad || key_bad {
+            return Err("hk_conflict");
+        }
+        Ok(s)
+    }
+
+    /// Remplace tous les réglages (import, réinitialisation) : tâche et écoute en cours arrêtées
+    pub fn replace_settings(&self, new: Settings) {
+        self.runner.stop();
+        self.cancel_record();
+        self.cancel_macro();
+        *self.settings.lock().unwrap() = new;
+        self.mark_dirty();
+        self.repaint();
+    }
+
     // ---------------------------------------------------------------- profils
     fn flash_msg(&self, k: &'static str) {
         *self.flash.lock().unwrap() = Some((k, std::time::Instant::now()));
@@ -579,6 +610,54 @@ mod tests {
     fn setup() -> (Arc<Shared>, Arc<Log>) {
         let log = Arc::new(Log::default());
         (Shared::new(Settings::default(), log.clone()), log)
+    }
+
+    #[test]
+    fn import_valid_and_defaults_roundtrip() {
+        let txt = serde_json::to_string_pretty(&Settings::default()).unwrap();
+        assert_eq!(Shared::parse_import(&txt).unwrap(), Settings::default());
+        // config 3.3.1 partielle : champs manquants = défauts
+        let s = Shared::parse_import(r#"{"pin":true,"press_ms":40.0}"#).unwrap();
+        assert!(s.pin && s.auto_check_updates && !s.start_minimized);
+    }
+
+    #[test]
+    fn import_hostile_is_bounded_or_rejected() {
+        assert_eq!(Shared::parse_import("pas du json"), Err("bad_file"));
+        assert_eq!(Shared::parse_import(r#"{"press_ms":"x"}"#), Err("bad_file"));
+        assert_eq!(Shared::parse_import(""), Err("bad_file"));
+        // valeurs absurdes : ramenées dans les bornes
+        let s = Shared::parse_import(r#"{"press_ms":1e12,"jitter_pct":-5,"stop_hotkey":[]}"#).unwrap();
+        assert!(s.press_ms <= config::MAX_PRESS_MS && s.jitter_pct >= 0.0);
+    }
+
+    #[test]
+    fn import_too_big_rejected() {
+        let big = format!(r#"{{"pad":"{}"}}"#, "a".repeat(config::MAX_FILE as usize));
+        assert_eq!(Shared::parse_import(&big), Err("bad_file"));
+    }
+
+    #[test]
+    fn import_conflict_rejected() {
+        let mut s = Settings::default();
+        s.spam.hotkey = vec![KeySpec::vk(0x75)];
+        s.pattern.hotkey = vec![KeySpec::vk(0x75)];
+        let txt = serde_json::to_string(&s).unwrap();
+        assert_eq!(Shared::parse_import(&txt), Err("hk_conflict"));
+        // touche du spam = raccourci du pattern
+        let mut s = Settings::default();
+        s.spam.key = s.pattern.hotkey[0].clone();
+        let txt = serde_json::to_string(&s).unwrap();
+        assert_eq!(Shared::parse_import(&txt), Err("hk_conflict"));
+    }
+
+    #[test]
+    fn replace_settings_stops_and_marks_dirty() {
+        let (sh, _) = setup();
+        let s = Settings { pin: true, ..Settings::default() };
+        sh.replace_settings(s);
+        assert!(sh.settings.lock().unwrap().pin);
+        assert!(sh.dirty.load(SeqCst));
     }
 
     #[test]

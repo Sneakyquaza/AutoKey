@@ -162,6 +162,55 @@ mod win {
 
     /// Icône de la zone de notification : fenêtre cachée (de premier niveau, pas « message-only » :
     /// ces dernières ne reçoivent pas le broadcast `TaskbarCreated`) dans un thread dédié.
+    /// Lancement au démarrage de Windows : valeur `AutoKey` de HKCU\...\Run (jamais HKLM, jamais d'admin)
+    pub mod autorun {
+        use std::ptr::null_mut;
+        use windows_sys::Win32::System::Registry::{
+            RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_SZ,
+        };
+
+        const SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+        const NAME: &str = "AutoKey";
+
+        fn w(s: &str) -> Vec<u16> {
+            s.encode_utf16().chain(Some(0)).collect()
+        }
+
+        fn open(access: u32) -> Option<HKEY> {
+            let mut key: HKEY = null_mut();
+            (unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, w(SUBKEY).as_ptr(), 0, access, &mut key) } == 0).then_some(key)
+        }
+
+        pub fn read() -> Option<String> {
+            let key = open(KEY_READ)?;
+            let mut buf = vec![0u16; 2048];
+            let (mut ty, mut len) = (0u32, (buf.len() * 2) as u32);
+            let r = unsafe { RegQueryValueExW(key, w(NAME).as_ptr(), null_mut(), &mut ty, buf.as_mut_ptr() as *mut u8, &mut len) };
+            unsafe { RegCloseKey(key) };
+            if r != 0 || ty != REG_SZ {
+                return None;
+            }
+            let n = (len as usize / 2).min(buf.len());
+            Some(String::from_utf16_lossy(&buf[..n]).trim_end_matches('\0').to_string())
+        }
+
+        /// `Some(commande)` : écrit la valeur ; `None` : la supprime
+        pub fn write(cmd: Option<&str>) -> bool {
+            let Some(key) = open(KEY_SET_VALUE) else { return false };
+            let name = w(NAME);
+            let ok = match cmd {
+                Some(c) => {
+                    let v = w(c);
+                    unsafe { RegSetValueExW(key, name.as_ptr(), 0, REG_SZ, v.as_ptr() as *const u8, (v.len() * 2) as u32) == 0 }
+                }
+                // supprimer une valeur absente n'est pas une erreur
+                None => unsafe { RegDeleteValueW(key, name.as_ptr()) == 0 || read().is_none() },
+            };
+            unsafe { RegCloseKey(key) };
+            ok
+        }
+    }
+
     pub mod tray {
         use super::super::TrayCmd;
         use crate::i18n::{tr, Lang};
@@ -604,6 +653,69 @@ pub fn hires(on: bool) {
     }
 }
 
+/// État du lancement au démarrage de Windows (registre = source de vérité)
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AutoStart {
+    Off,
+    On,
+    /// Activé, mais la valeur pointe vers un autre exe (déplacé / ancienne copie)
+    OtherPath,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+/// Commande écrite dans le registre : chemin de l'exe entre guillemets
+pub fn autorun_command(exe: &std::path::Path) -> String {
+    format!("\"{}\"", exe.display())
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+/// Compare la valeur du registre à la commande voulue (insensible à la casse, comme les chemins Windows)
+pub fn autorun_classify(cur: Option<&str>, want: &str) -> AutoStart {
+    match cur.map(str::trim) {
+        None | Some("") => AutoStart::Off,
+        Some(c) if c.eq_ignore_ascii_case(want) => AutoStart::On,
+        Some(_) => AutoStart::OtherPath,
+    }
+}
+
+/// Options système (zone de notification, lancement au démarrage) : Windows seulement
+/// (affichées aussi pour les captures `shots` sous Linux)
+pub fn autostart_supported() -> bool {
+    cfg!(windows) || cfg!(feature = "shots")
+}
+
+pub fn autostart_state() -> AutoStart {
+    #[cfg(windows)]
+    if let Ok(exe) = std::env::current_exe() {
+        return autorun_classify(win::autorun::read().as_deref(), &autorun_command(&exe));
+    }
+    AutoStart::Off
+}
+
+/// Active (chemin de l'exe courant) ou désactive le lancement au démarrage. Faux en cas d'échec / hors Windows.
+pub fn autostart_set(_on: bool) -> bool {
+    #[cfg(windows)]
+    match (_on, std::env::current_exe()) {
+        (false, _) => win::autorun::write(None),
+        (true, Ok(exe)) => win::autorun::write(Some(&autorun_command(&exe))),
+        (true, Err(_)) => false,
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+/// Ouvre un dossier dans l'explorateur. No-op hors Windows.
+pub fn open_folder(_dir: &std::path::Path) {
+    #[cfg(windows)]
+    {
+        let _ = std::fs::create_dir_all(_dir);
+        let sys = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_default();
+        let explorer = sys.join("explorer.exe");
+        let _ = std::process::Command::new(if explorer.is_file() { explorer } else { "explorer".into() }).arg(_dir).spawn();
+    }
+}
+
 /// Bip court non bloquant (thread dédié) : aigu au démarrage, grave à l'arrêt. No-op hors Windows.
 pub fn beep(start: bool) {
     #[cfg(windows)]
@@ -661,6 +773,14 @@ pub fn pick_save() -> Option<std::path::PathBuf> {
     return None;
 }
 
+/// Enregistrer sous (JSON) avec un nom proposé
+pub fn pick_save_as(_name: &str) -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    return rfd::FileDialog::new().add_filter("AutoKey", &["json"]).set_file_name(_name).save_file();
+    #[cfg(not(windows))]
+    return None;
+}
+
 pub fn pick_open() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     return rfd::FileDialog::new().add_filter("AutoKey", &["json"]).pick_file();
@@ -671,6 +791,17 @@ pub fn pick_open() -> Option<std::path::PathBuf> {
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autorun_command_and_classify() {
+        let want = autorun_command(std::path::Path::new(r"C:\Apps\AutoKey.exe"));
+        assert_eq!(want, r#""C:\Apps\AutoKey.exe""#);
+        assert_eq!(autorun_classify(None, &want), AutoStart::Off);
+        assert_eq!(autorun_classify(Some(""), &want), AutoStart::Off);
+        assert_eq!(autorun_classify(Some(&want), &want), AutoStart::On);
+        assert_eq!(autorun_classify(Some(r#""c:\apps\autokey.exe""#), &want), AutoStart::On);
+        assert_eq!(autorun_classify(Some(r#""D:\Old\AutoKey.exe""#), &want), AutoStart::OtherPath);
+    }
 
     #[test]
     fn release_held_releases_only_held_keys() {
