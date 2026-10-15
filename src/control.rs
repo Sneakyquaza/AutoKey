@@ -111,9 +111,11 @@ impl Shared {
         if self.is_running(m) || self.macro_active() {
             return;
         }
+        let bind;
         let job = {
             let s = self.settings.lock().unwrap();
             self.runner.beep.store(s.beep, SeqCst);
+            bind = s.bind_window;
             match m {
                 Mode::Spam => Job::Spam {
                     key: s.spam.key.clone(),
@@ -143,7 +145,10 @@ impl Shared {
                 }
             }
         };
-        self.runner.start(job);
+        // Liaison : fenêtre au premier plan à cet instant ; si c'est AutoKey (démarrage par le bouton
+        // de l'UI), on attend la prochaine fenêtre étrangère au premier plan et on la verrouille.
+        let focus = if bind { crate::platform::bind_foreground() } else { None };
+        self.runner.start_bound(job, focus);
         self.repaint();
     }
 

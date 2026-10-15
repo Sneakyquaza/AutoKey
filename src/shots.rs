@@ -12,13 +12,14 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 15] = [
+const SCENES: [&str; 16] = [
     "spam_fr",
     "spam_rec_en",
     "pattern_empty",
     "pattern_ex",
     "pattern_run",
     "pattern_pt",
+    "paused_pt",
     "modal",
     "update",
     "update_dl",
@@ -105,6 +106,15 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
             s.lang = Lang::Pt;
             s.jitter_pct = 15.0;
             s.beep = true;
+            s.bind_window = true;
+        }
+        "paused_pt" => {
+            s.mode = Mode::Spam;
+            s.lang = Lang::Pt;
+            drop(s);
+            sh.start(Mode::Spam);
+            sh.runner.status.paused.store(true, std::sync::atomic::Ordering::SeqCst); // simulé : pas de fenêtre liée
+            s = sh.settings.lock().unwrap();
         }
         "macro_rec_pt" => {
             s.mode = Mode::Pattern;

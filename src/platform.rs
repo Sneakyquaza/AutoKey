@@ -154,6 +154,88 @@ mod win {
             );
         }
     }
+
+    /// Liaison à une fenêtre cible (racine du premier plan). Tant que `target` vaut 0, la tâche est
+    /// « armée » : la première fenêtre au premier plan qui n'appartient pas à AutoKey est verrouillée.
+    pub struct Bound {
+        target: std::sync::atomic::AtomicIsize,
+        /// candidat en armement + instant d'apparition : verrouillé seulement s'il reste
+        /// 400 ms au premier plan (évite le sélecteur Alt+Tab / la barre des tâches)
+        cand: std::sync::Mutex<(isize, std::time::Instant)>,
+    }
+
+    /// Racine de la fenêtre au premier plan et PID propriétaire (0 si aucune)
+    fn foreground() -> (isize, u32) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, GA_ROOT};
+        unsafe {
+            let fg = GetForegroundWindow();
+            if fg.is_null() {
+                return (0, 0);
+            }
+            let root = GetAncestor(fg, GA_ROOT);
+            let w = if root.is_null() { fg } else { root };
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(w, &mut pid);
+            (w as isize, pid)
+        }
+    }
+
+    impl Bound {
+        /// Capture la fenêtre au premier plan ; si c'est AutoKey (démarrage par le bouton de l'UI),
+        /// reste armée et lie la prochaine fenêtre étrangère qui passera au premier plan.
+        pub fn new() -> Self {
+            let b = Bound { target: std::sync::atomic::AtomicIsize::new(0), cand: std::sync::Mutex::new((0, std::time::Instant::now())) };
+            // démarrage par raccourci : la fenêtre au premier plan est la cible, sans délai
+            let (w, pid) = foreground();
+            if w != 0 && pid != unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() } {
+                b.target.store(w, std::sync::atomic::Ordering::SeqCst);
+            }
+            b
+        }
+        fn arm(&self) -> bool {
+            let (w, pid) = foreground();
+            let mut c = self.cand.lock().unwrap_or_else(|e| e.into_inner());
+            if w == 0 || pid == unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() } {
+                c.0 = 0;
+                return false;
+            }
+            if c.0 != w {
+                *c = (w, std::time::Instant::now());
+                return false;
+            }
+            if c.1.elapsed() < std::time::Duration::from_millis(400) {
+                return false;
+            }
+            self.target.store(w, std::sync::atomic::Ordering::SeqCst);
+            true
+        }
+    }
+
+    impl crate::engine::Focus for Bound {
+        fn ok(&self) -> bool {
+            let t = self.target.load(std::sync::atomic::Ordering::SeqCst);
+            if t == 0 {
+                return self.arm();
+            }
+            foreground().0 == t
+        }
+        fn gone(&self) -> bool {
+            use windows_sys::Win32::UI::WindowsAndMessaging::IsWindow;
+            let t = self.target.load(std::sync::atomic::Ordering::SeqCst);
+            t != 0 && unsafe { IsWindow(t as _) } == 0
+        }
+        fn armed(&self) -> bool {
+            self.target.load(std::sync::atomic::Ordering::SeqCst) != 0
+        }
+    }
+}
+
+/// Liaison à la fenêtre au premier plan (voir `win::Bound`). `None` hors Windows : toujours actif.
+pub fn bind_foreground() -> Option<Arc<dyn crate::engine::Focus>> {
+    #[cfg(windows)]
+    return Some(Arc::new(win::Bound::new()));
+    #[cfg(not(windows))]
+    return None;
 }
 
 // ------------------------------------------------------------------ simulation hors Windows

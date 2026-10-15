@@ -135,7 +135,7 @@ impl App {
     pub(super) fn settings_popup(&mut self, ui: &mut Ui, full: Rect, s: &mut Settings, rec: &Option<Recording>, acts: &mut Vec<Act>) {
         let lang = s.lang;
         let gear_right = full.max.x - 12.0 - 34.0 - 38.0 - 38.0;
-        let r = Rect::from_min_size(pos2(gear_right - 300.0, full.min.y + 52.0), vec2(300.0, 4.0 * 50.0 + 12.0));
+        let r = Rect::from_min_size(pos2(gear_right - 300.0, full.min.y + 52.0), vec2(300.0, 5.0 * 50.0 + 12.0));
         let p = ui.painter().clone();
         p.rect_filled(r.translate(vec2(0.0, 6.0)).expand(2.0), 14.0, Color32::from_black_alpha(90));
         p.rect(r, 12.0, SURFACE, sk(1.0, LINE2));
@@ -159,10 +159,15 @@ impl App {
         let br = Rect::from_center_size(pos2(r.max.x - 16.0 - 45.0, row(2.0)), vec2(90.0, 36.0));
         segmented(ui, br, Id::new("beep"), &[(false, tr(lang, "off").into()), (true, tr(lang, "on").into())], &mut s.beep, 13.0, false);
         inside |= ui.rect_contains_pointer(br);
+        // liaison à la fenêtre cible
+        text(&p, pos2(r.min.x + 16.0, row(3.0)), Align2::LEFT_CENTER, tr(lang, "bind_win"), 13.0, W::S, TEXT);
+        let wr = Rect::from_center_size(pos2(r.max.x - 16.0 - 45.0, row(3.0)), vec2(90.0, 36.0));
+        segmented(ui, wr, Id::new("bindwin"), &[(false, tr(lang, "off").into()), (true, tr(lang, "on").into())], &mut s.bind_window, 13.0, false);
+        inside |= ui.rect_contains_pointer(wr);
         // arrêt d'urgence
-        text(&p, pos2(r.min.x + 16.0, row(3.0)), Align2::LEFT_CENTER, tr(lang, "stop_hk"), 13.0, W::S, TEXT);
+        text(&p, pos2(r.min.x + 16.0, row(4.0)), Align2::LEFT_CENTER, tr(lang, "stop_hk"), 13.0, W::S, TEXT);
         let (lbl, recording) = Self::rec_label(s, rec, Target::StopHotkey, combo_label(&s.stop_hotkey, lang));
-        let cr = Rect::from_center_size(pos2(r.max.x - 16.0 - 60.0, row(3.0)), vec2(120.0, 36.0));
+        let cr = Rect::from_center_size(pos2(r.max.x - 16.0 - 60.0, row(4.0)), vec2(120.0, 36.0));
         let resp = keycap(ui, cr, Id::new("stophk"), &lbl, recording, CapSize::Mid, lang, true).on_hover_text(tr(lang, "click_change"));
         inside |= resp.hovered();
         if resp.clicked() {
@@ -375,6 +380,13 @@ impl App {
                 );
                 msg += &elapsed;
             }
+        }
+        if running && st.waiting.load(SeqCst) {
+            msg = tr(lang, "arming").to_string();
+            col = AMBER;
+        } else if running && st.paused.load(SeqCst) {
+            msg = tr(lang, "paused").to_string();
+            col = AMBER;
         }
         if let Some((n, _)) = self.sh.macro_progress() {
             msg = trf(lang, "macro_msg", &[("n", n.to_string())]);

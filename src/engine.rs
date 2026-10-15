@@ -11,6 +11,23 @@ pub trait Keyboard: Send + Sync {
     fn up(&self, k: &KeySpec);
 }
 
+/// Fenêtre cible : la tâche n'envoie rien tant que `ok()` est faux (pause).
+pub trait Focus: Send + Sync {
+    /// La cible est au premier plan (et verrouillée)
+    fn ok(&self) -> bool;
+    /// La cible n'existe plus : la tâche doit s'arrêter
+    fn gone(&self) -> bool {
+        false
+    }
+    /// Faux tant que la cible n'est pas encore choisie (armement)
+    fn armed(&self) -> bool {
+        true
+    }
+}
+
+/// Période de vérification du focus pendant les attentes et les maintiens
+const FOCUS_POLL: Duration = Duration::from_millis(20);
+
 #[derive(Clone, Debug)]
 pub enum Job {
     /// `jitter` : fraction 0..0.5 (0 = aucun aléa) ; `limit` : arrêt automatique
@@ -42,6 +59,10 @@ pub struct Status {
     pub count: AtomicU64,
     pub loop_i: AtomicU32,
     pub loops: AtomicU32,
+    /// En pause : fenêtre cible inactive
+    pub paused: AtomicBool,
+    /// Armement : cible pas encore choisie
+    pub waiting: AtomicBool,
     pub step: AtomicI32,
     pub steps_total: AtomicU32,
     /// Instant de démarrage de la tâche en cours
@@ -145,7 +166,13 @@ impl Runner {
         }
     }
 
+    #[cfg(test)]
     pub fn start(&self, job: Job) {
+        self.start_bound(job, None);
+    }
+
+    /// Comme `start`, avec une fenêtre cible optionnelle (pause hors focus, arrêt si fermée)
+    pub fn start_bound(&self, job: Job, focus: Option<Arc<dyn Focus>>) {
         self.stop();
         let st = &self.status;
         st.count.store(0, SeqCst);
@@ -153,6 +180,8 @@ impl Runner {
         st.step.store(-1, SeqCst);
         st.mode.store(matches!(job, Job::Pattern { .. }) as u8, SeqCst);
         *st.started.lock().unwrap() = Some(Instant::now());
+        st.paused.store(false, SeqCst);
+        st.waiting.store(false, SeqCst);
         st.running.store(true, SeqCst);
         let beep = self.beep.load(SeqCst);
         let stop = Arc::new(Stop::new());
@@ -162,7 +191,9 @@ impl Runner {
             if beep {
                 crate::platform::beep(true);
             }
-            run_job(&*kb, &status, &stop2, job);
+            run_job(&*kb, &status, &stop2, focus, job);
+            status.paused.store(false, SeqCst);
+            status.waiting.store(false, SeqCst);
             crate::platform::hires(false);
             status.step.store(-1, SeqCst);
             status.running.store(false, SeqCst);
@@ -174,17 +205,101 @@ impl Runner {
     }
 }
 
-/// Frappe : appui maintenu `press` s (interruptible), toujours relâché. Renvoie false si arrêt demandé.
-fn tap(kb: &dyn Keyboard, k: &KeySpec, st: &Status, stop: &Stop, press: f64) -> bool {
-    kb.down(k);
-    let ok = press <= 0.0 || stop.wait(press);
-    kb.up(k);
-    st.count.fetch_add(1, SeqCst);
-    ok
+/// Contexte d'exécution : clavier, état, arrêt et (option) fenêtre cible.
+struct Gate<'a> {
+    kb: &'a dyn Keyboard,
+    st: &'a Status,
+    stop: &'a Stop,
+    focus: Option<Arc<dyn Focus>>,
+    /// Fin réelle de la limite de durée du spam (compte aussi le temps en pause)
+    limit: Option<Instant>,
 }
 
-fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, job: Job) {
+impl Gate<'_> {
+    fn blocked(&self) -> bool {
+        self.focus.as_ref().is_some_and(|f| !f.ok())
+    }
+
+    /// Pause tant que la cible n'est pas au premier plan. Renvoie true à la reprise du focus,
+    /// false si arrêt demandé, cible fermée (la tâche est alors arrêtée) ou limite de durée atteinte.
+    fn pause(&self) -> bool {
+        let Some(f) = &self.focus else { return true };
+        self.st.paused.store(true, SeqCst);
+        let ok = loop {
+            if f.ok() {
+                break true;
+            }
+            if f.gone() {
+                self.stop.set();
+                break false;
+            }
+            self.st.waiting.store(!f.armed(), SeqCst);
+            if self.limit.is_some_and(|d| Instant::now() >= d) || !self.stop.wait(FOCUS_POLL.as_secs_f64()) {
+                break false;
+            }
+        };
+        self.st.paused.store(false, SeqCst);
+        self.st.waiting.store(false, SeqCst);
+        ok
+    }
+
+    /// Attend `secs` (interruptible), `held` éventuellement maintenue. Hors focus : la touche est
+    /// relâchée et le temps ne s'écoule pas ; à la reprise elle est re-pressée pour la durée restante.
+    /// Renvoie false si arrêt demandé. Aucune touche n'est laissée enfoncée.
+    fn run(&self, held: Option<&KeySpec>, secs: f64) -> bool {
+        let mut rem = Duration::from_secs_f64(secs.max(0.0));
+        if let Some(k) = held {
+            if self.blocked() && !self.pause() {
+                return false;
+            }
+            self.kb.down(k);
+        }
+        let mut down = held.is_some();
+        let ok = loop {
+            if rem.is_zero() {
+                break true;
+            }
+            if self.focus.is_none() {
+                break self.stop.wait(rem.as_secs_f64());
+            }
+            if self.blocked() {
+                if let (true, Some(k)) = (down, held) {
+                    self.kb.up(k);
+                    down = false;
+                }
+                if !self.pause() {
+                    break false;
+                }
+                if let Some(k) = held {
+                    self.kb.down(k);
+                    down = true;
+                }
+            }
+            let t = Instant::now();
+            if !self.stop.wait(rem.min(FOCUS_POLL).as_secs_f64()) {
+                break false;
+            }
+            rem = rem.saturating_sub(t.elapsed());
+        };
+        if let (true, Some(k)) = (down, held) {
+            self.kb.up(k);
+        }
+        ok
+    }
+
+    /// Frappe : appui maintenu `press` s, toujours relâché. Renvoie false si arrêt demandé.
+    fn tap(&self, k: &KeySpec, press: f64) -> bool {
+        let ok = self.run(Some(k), press);
+        if ok {
+            self.st.count.fetch_add(1, SeqCst);
+        }
+        ok
+    }
+}
+
+fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, focus: Option<Arc<dyn Focus>>, job: Job) {
     let mut rng = Rng::new();
+    let mut g = Gate { kb, st, stop, focus, limit: None };
     match job {
         Job::Spam { key, interval, press, jitter, limit } => {
             let base = interval.max(crate::config::MIN_INTERVAL_S);
@@ -193,6 +308,7 @@ fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, job: Job) {
                 SpamLimit::Duration(d) => Some(next + Duration::from_secs_f64(d.max(0.0))),
                 _ => None,
             };
+            g.limit = deadline;
             let mut taps = 0u64;
             loop {
                 if deadline.is_some_and(|d| Instant::now() >= d) {
@@ -200,7 +316,7 @@ fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, job: Job) {
                 }
                 let iv = rng.jitter(base, jitter).max(crate::config::MIN_INTERVAL_S);
                 let hold = press.max(0.0).min(iv / 2.0);
-                if !tap(kb, &key, st, stop, hold) {
+                if !g.tap(&key, hold) {
                     break;
                 }
                 taps += 1;
@@ -210,11 +326,11 @@ fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, job: Job) {
                 next += Duration::from_secs_f64(iv);
                 let now = Instant::now();
                 if next < now {
-                    next = now; // pas de rattrapage en rafale
+                    next = now; // pas de rattrapage en rafale (ni après une pause)
                 }
                 // attente plafonnée à la fin de la durée limite
                 let until = deadline.map_or(next, |d| next.min(d));
-                if !stop.wait_until(until) {
+                if !g.run(None, until.saturating_duration_since(Instant::now()).as_secs_f64()) {
                     break;
                 }
             }
@@ -230,22 +346,19 @@ fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, job: Job) {
                     st.step.store(n as i32, SeqCst);
                     let ok = match s {
                         CStep::Hold(k, sec) => {
-                            kb.down(k);
-                            let ok = stop.wait(*sec);
-                            kb.up(k); // toujours relâchée
-                            ok
+                            g.run(Some(k), *sec) // toujours relâchée ; pause = durée restante conservée
                         }
                         CStep::Press(k, count, gap, press) => {
                             let mut ok = true;
                             for c in 0..*count {
-                                if !tap(kb, k, st, stop, *press) || (c + 1 < *count && !stop.wait(rng.jitter(*gap, jitter))) {
+                                if !g.tap(k, *press) || (c + 1 < *count && !g.run(None, rng.jitter(*gap, jitter))) {
                                     ok = false;
                                     break;
                                 }
                             }
                             ok
                         }
-                        CStep::Wait(sec) => stop.wait(rng.jitter(*sec, jitter)),
+                        CStep::Wait(sec) => g.run(None, rng.jitter(*sec, jitter)), // le temps en pause ne compte pas
                     };
                     if !ok || stop.is_set() {
                         break 'outer;
@@ -414,5 +527,117 @@ pub mod tests {
         let (d, u) = (l.iter().filter(|e| e.0).count(), l.iter().filter(|e| !e.0).count());
         assert!((5..=7).contains(&d), "presses = {d}");
         assert_eq!(d, u);
+    }
+
+    /// Focus simulé
+    struct Mock(AtomicBool);
+    impl Focus for Mock {
+        fn ok(&self) -> bool {
+            self.0.load(SeqCst)
+        }
+    }
+
+    fn mock(on: bool) -> Arc<Mock> {
+        Arc::new(Mock(AtomicBool::new(on)))
+    }
+
+    #[test]
+    fn no_keys_while_paused() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        let f = mock(false);
+        r.start_bound(Job::Spam { key: KeySpec::letter('e'), interval: 0.02, press: 0.0, jitter: 0.0, limit: SpamLimit::None }, Some(f.clone()));
+        sleep(200);
+        assert!(log.0.lock().unwrap().is_empty());
+        assert!(r.status.paused.load(SeqCst));
+        f.0.store(true, SeqCst);
+        sleep(150);
+        assert!(!r.status.paused.load(SeqCst));
+        assert!(!log.0.lock().unwrap().is_empty());
+        r.stop();
+        let l = log.0.lock().unwrap();
+        assert_eq!(l.iter().filter(|e| e.0).count(), l.iter().filter(|e| !e.0).count());
+    }
+
+    #[test]
+    fn hold_released_on_focus_loss_and_repressed() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        let f = mock(true);
+        r.start_bound(Job::Pattern { steps: vec![CStep::Hold(KeySpec::letter('z'), 0.4)], loops: 1, jitter: 0.0 }, Some(f.clone()));
+        sleep(100);
+        f.0.store(false, SeqCst);
+        sleep(150);
+        assert_eq!(*log.0.lock().unwrap(), vec![(true, 0x5A), (false, 0x5A)]);
+        let t = Instant::now();
+        f.0.store(true, SeqCst);
+        sleep(60);
+        assert_eq!(log.0.lock().unwrap().len(), 3, "re-pressée à la reprise");
+        while r.running() {
+            sleep(10);
+        }
+        // durée restante ≈ 0,3 s (le temps en pause ne compte pas)
+        assert!(t.elapsed() >= Duration::from_millis(240), "restant = {:?}", t.elapsed());
+        assert_eq!(*log.0.lock().unwrap(), vec![(true, 0x5A), (false, 0x5A), (true, 0x5A), (false, 0x5A)]);
+    }
+
+    #[test]
+    fn stop_while_paused_releases_all() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        let f = mock(true);
+        r.start_bound(Job::Pattern { steps: vec![CStep::Hold(KeySpec::letter('z'), 5.0)], loops: 0, jitter: 0.0 }, Some(f.clone()));
+        sleep(60);
+        f.0.store(false, SeqCst);
+        sleep(80);
+        let t = Instant::now();
+        r.stop();
+        assert!(t.elapsed() < Duration::from_millis(150));
+        assert_eq!(*log.0.lock().unwrap(), vec![(true, 0x5A), (false, 0x5A)]);
+        assert!(!r.status.paused.load(SeqCst));
+    }
+
+    #[test]
+    fn spam_no_burst_after_pause() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        let f = mock(false);
+        r.start_bound(Job::Spam { key: KeySpec::letter('e'), interval: 0.05, press: 0.0, jitter: 0.0, limit: SpamLimit::None }, Some(f.clone()));
+        sleep(500);
+        f.0.store(true, SeqCst);
+        sleep(120);
+        r.stop();
+        let n = log.0.lock().unwrap().iter().filter(|e| e.0).count();
+        assert!((1..=4).contains(&n), "presses = {n}");
+    }
+
+    #[test]
+    fn spam_duration_counts_real_time_in_pause() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        let f = mock(false);
+        r.start_bound(Job::Spam { key: KeySpec::letter('e'), interval: 0.05, press: 0.0, jitter: 0.0, limit: SpamLimit::Duration(0.2) }, Some(f));
+        sleep(500);
+        assert!(!r.running());
+        assert!(log.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn gone_window_stops_task() {
+        struct Gone;
+        impl Focus for Gone {
+            fn ok(&self) -> bool {
+                false
+            }
+            fn gone(&self) -> bool {
+                true
+            }
+        }
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        r.start_bound(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 1, 0.0, 0.0)], loops: 0, jitter: 0.0 }, Some(Arc::new(Gone)));
+        sleep(150);
+        assert!(!r.running());
+        assert!(log.0.lock().unwrap().is_empty());
     }
 }

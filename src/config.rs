@@ -156,6 +156,8 @@ pub struct Settings {
     pub jitter_pct: f64,
     /// Bip au démarrage / à l'arrêt
     pub beep: bool,
+    /// N'envoyer les touches que dans la fenêtre où la tâche a été lancée
+    pub bind_window: bool,
     /// Configurations nommées (spam + pattern ; les raccourcis restent globaux)
     pub profiles: Vec<Profile>,
     /// Index du profil actif dans `profiles`
@@ -194,6 +196,7 @@ impl Default for Settings {
             stop_hotkey: vec![KeySpec::vk(0x77)],
             jitter_pct: 0.0,
             beep: false,
+            bind_window: false,
             profiles: vec![],
             active_profile: None,
         }
@@ -507,9 +510,12 @@ mod tests {
         assert_eq!(s.spam.limit, SpamLimit::None);
         assert_eq!(s.jitter_pct, 0.0);
         assert!(!s.beep);
+        assert!(!s.bind_window);
         std::fs::write(t.file(), r#"{"jitter_pct":12.5,"beep":true,"spam":{"limit":{"Count":42}}}"#).unwrap();
         let s = load_from(&t.file());
         assert_eq!((s.jitter_pct, s.beep, s.spam.limit), (12.5, true, SpamLimit::Count(42)));
+        std::fs::write(t.file(), r#"{"bind_window":true}"#).unwrap();
+        assert!(load_from(&t.file()).bind_window);
     }
 
     #[test]
