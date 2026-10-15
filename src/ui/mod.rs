@@ -351,6 +351,25 @@ impl App {
         crate::shots::tick(self, ctx);
     }
 
+    /// Mémorise la position de la fenêtre (sans écriture disque : sauvée à la sortie ou au masquage)
+    pub fn set_window_pos(&self, pos: (i32, i32)) {
+        let mut s = self.sh.settings.lock().unwrap();
+        if s.window_pos != Some(pos) {
+            s.window_pos = Some(pos);
+            drop(s);
+            self.sh.mark_dirty(); // sauvegarde débouncée : survit à un arrêt brutal
+        }
+    }
+
+    pub fn window_pos(&self) -> Option<(i32, i32)> {
+        self.sh.settings.lock().unwrap().window_pos
+    }
+
+    /// Fenêtre cachée dans la zone de notification : sauvegarde (débouncée) de la position
+    pub fn mark_dirty(&self) {
+        self.sh.mark_dirty();
+    }
+
     pub fn on_exit(&mut self) {
         self.sh.runner.stop();
         crate::platform::release_held();

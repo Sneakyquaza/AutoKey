@@ -64,6 +64,35 @@ fn startup_hidden(tray_active: bool, waited: Duration) -> Startup {
     }
 }
 
+/// Rectangle d'un moniteur en pixels physiques (repère du bureau virtuel) + son facteur d'échelle
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MonRect {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    scale: f64,
+}
+
+/// Barre de titre minimale à garder visible (pixels physiques)
+const MIN_TITLE: (i64, i64) = (120, 30);
+
+/// La position mémorisée (coin haut-gauche extérieur, pixels physiques) est-elle utilisable ?
+/// Vrai si la barre de titre (jusqu'à 120×30 px en haut de la fenêtre) tient dans un moniteur connecté.
+/// La taille physique de la fenêtre dépend de l'échelle du moniteur testé (taille logique × échelle).
+/// Zone de travail inconnue de winit : on compare au rectangle complet du moniteur.
+fn pos_usable(pos: (i32, i32), logical: (f32, f32), mons: &[MonRect]) -> bool {
+    mons.iter().any(|m| {
+        let (w, h) = ((logical.0 as f64 * m.scale) as i64, (logical.1 as f64 * m.scale) as i64);
+        let (need_w, need_h) = (w.min(MIN_TITLE.0), h.min(MIN_TITLE.1));
+        let (x0, y0) = (pos.0 as i64, pos.1 as i64);
+        // la bande de titre est [x0, x0+w) × [y0, y0+need_h)
+        let ox = (x0 + w).min(m.x as i64 + m.w as i64) - x0.max(m.x as i64);
+        let oy = (y0 + need_h).min(m.y as i64 + m.h as i64) - y0.max(m.y as i64);
+        ox >= need_w && oy >= need_h
+    })
+}
+
 struct Runner {
     ctx: egui::Context,
     app: ui::App,
@@ -207,7 +236,15 @@ impl ApplicationHandler<UserEvent> for Runner {
             .with_visible(false)
             .with_window_icon(icon)
             .with_window_level(if self.pin { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal });
-        if let Some(m) = el.primary_monitor() {
+        let mons: Vec<MonRect> = el
+            .available_monitors()
+            .map(|m| MonRect { x: m.position().x, y: m.position().y, w: m.size().width, h: m.size().height, scale: m.scale_factor() })
+            .collect();
+        // position mémorisée (pixels physiques partout : cohérent entre écrans de DPI différents)
+        let saved = self.app.window_pos().filter(|&p| pos_usable(p, (self.width, self.height), &mons));
+        if let Some((x, y)) = saved {
+            attrs = attrs.with_position(PhysicalPosition::new(x, y));
+        } else if let Some(m) = el.primary_monitor() {
             let s = m.scale_factor();
             let ms = m.size();
             let mp = m.position();
@@ -238,12 +275,19 @@ impl ApplicationHandler<UserEvent> for Runner {
             WindowEvent::CloseRequested if self.app.tray_enabled() => {
                 // icône de notification active : on cache la fenêtre, la tâche continue (Quitter : menu de l'icône)
                 g.window.set_visible(false);
+                self.app.mark_dirty();
                 return;
             }
             WindowEvent::CloseRequested => {
                 self.app.on_exit();
                 el.exit();
                 return;
+            }
+            WindowEvent::Moved(p) => {
+                // ni réduite (Windows : -32000,-32000), ni cachée (démarrage caché, zone de notification)
+                if g.window.is_visible() != Some(false) && g.window.is_minimized() != Some(true) && p.x > -30_000 && p.y > -30_000 {
+                    self.app.set_window_pos((p.x, p.y));
+                }
             }
             WindowEvent::RedrawRequested => {
                 // demandé par le système (fenêtre affichée, découverte, restaurée…) : tout ré-afficher
@@ -388,5 +432,53 @@ mod tests {
         assert_eq!(startup_hidden(false, Duration::from_millis(500)), Startup::Wait);
         assert_eq!(startup_hidden(false, TRAY_WAIT), Startup::Show);
         assert_eq!(startup_hidden(true, Duration::from_secs(10)), Startup::Stay);
+    }
+
+    fn mon(x: i32, y: i32, w: u32, h: u32, scale: f64) -> MonRect {
+        MonRect { x, y, w, h, scale }
+    }
+    const SZ: (f32, f32) = (400.0, 500.0);
+
+    #[test]
+    fn pos_same_screen_and_second_screens() {
+        let main = mon(0, 0, 1920, 1080, 1.0);
+        assert!(pos_usable((500, 300), SZ, &[main]));
+        // 2e écran à droite
+        let right = mon(1920, 0, 1920, 1080, 1.0);
+        assert!(pos_usable((2500, 100), SZ, &[main, right]));
+        // 2e écran à gauche (coordonnées négatives)
+        let left = mon(-1920, 0, 1920, 1080, 1.0);
+        assert!(pos_usable((-1500, 100), SZ, &[left, main]));
+        // écran en haut, y négatif
+        let up = mon(0, -1080, 1920, 1080, 1.0);
+        assert!(pos_usable((100, -900), SZ, &[up, main]));
+    }
+
+    #[test]
+    fn pos_unplugged_or_offscreen() {
+        let main = mon(0, 0, 1920, 1080, 1.0);
+        assert!(!pos_usable((2500, 100), SZ, &[main]));
+        assert!(!pos_usable((-1500, 100), SZ, &[main]));
+        assert!(!pos_usable((100, 100), SZ, &[]));
+        // barre de titre sous le bas de l'écran
+        assert!(!pos_usable((100, 1070), SZ, &[main]));
+        // seulement 50 px de large visibles
+        assert!(!pos_usable((1870, 100), SZ, &[main]));
+        // corps hors écran en bas mais barre de titre visible : accepté
+        assert!(pos_usable((100, 1000), SZ, &[main]));
+        // limite exacte : 120 px visibles
+        assert!(pos_usable((1800, 100), SZ, &[main]));
+        assert!(!pos_usable((1801, 100), SZ, &[main]));
+    }
+
+    #[test]
+    fn pos_dpi_changes_size() {
+        // écran 4K à 200 % : la fenêtre mesure 800×1000 px physiques, barre 120×30 px
+        let hi = mon(0, 0, 3840, 2160, 2.0);
+        assert!(pos_usable((3720, 100), SZ, &[hi]));
+        assert!(!pos_usable((3721, 100), SZ, &[hi]));
+        // la même position sur un écran 1080p à 100 % n'est plus valide
+        let lo = mon(0, 0, 1920, 1080, 1.0);
+        assert!(!pos_usable((3720, 100), SZ, &[lo]));
     }
 }

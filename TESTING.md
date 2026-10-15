@@ -50,6 +50,7 @@ Le comportement clavier réel n'est pas testable hors Windows (le code est seule
 - [ ] **Zone de notification** : icône présente, menu clic droit (Afficher / Quitter), fermer et réduire cachent la fenêtre, l'icône revient après un redémarrage de l'explorateur.
 - [ ] **Démarrage caché** : « Démarrer caché » lance l'exe sans fenêtre visible ; lancer une 2e instance ré-affiche la première.
 - [ ] **Démarrage avec Windows** : activer, se déconnecter / reconnecter, AutoKey démarre ; désactiver retire l'entrée.
+- [ ] **Position de la fenêtre** : déplacer sur l'écran 2, fermer (et Quitter via l'icône), relancer → rouvre au même endroit sur l'écran 2 ; débrancher l'écran 2 puis relancer → fenêtre visible, centrée sur l'écran principal ; démarrage caché puis Afficher → bonne position ; réduite dans la barre des tâches, ne pas perdre la position.
 - [ ] **Mises à jour** : « Vérifier maintenant » (à jour, puis avec une version plus ancienne installée : le bouton « Mettre à jour » apparaît) ; mise à jour réelle jusqu'au redémarrage sur la nouvelle version ; désactiver la vérification automatique est pris en compte.
 - [ ] **Import / export / réinitialisation** : exporter, modifier, importer (réglages restaurés) ; un fichier invalide ou en conflit est refusé ; réinitialiser garde profils et langue.
 - [ ] **Vue compacte** : bascule dans les deux sens, redimensionnement correct, démarrer / arrêter, changement de mode, panneau Réglages ouvert en vue compacte.

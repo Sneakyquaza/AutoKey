@@ -170,6 +170,9 @@ pub struct Settings {
     pub start_minimized: bool,
     /// Vérifier les mises à jour au démarrage (puis toutes les 6 h)
     pub auto_check_updates: bool,
+    /// Dernière position de la fenêtre (coin haut-gauche extérieur, pixels physiques, repère du bureau virtuel ;
+    /// négatif possible avec un écran à gauche/au-dessus). `None` = placement par défaut (centré)
+    pub window_pos: Option<(i32, i32)>,
 }
 
 /// Configuration nommée : seuls la touche/cadence du spam et le pattern sont rechargés,
@@ -211,6 +214,7 @@ impl Default for Settings {
             compact: false,
             start_minimized: false,
             auto_check_updates: true,
+            window_pos: None,
         }
     }
 }
@@ -319,7 +323,13 @@ fn sanitize_profiles(s: &mut Settings) {
     s.active_profile = s.active_profile.filter(|&i| i < s.profiles.len());
 }
 
+/// Bornes de `window_pos` (pixels physiques) : au-delà, valeur corrompue ou saugrenue
+pub const MAX_WINDOW_POS: i32 = 100_000;
+
 pub fn sanitize(s: &mut Settings) {
+    if s.window_pos.is_some_and(|(x, y)| x.abs() > MAX_WINDOW_POS || y.abs() > MAX_WINDOW_POS) {
+        s.window_pos = None;
+    }
     sanitize_spam(&mut s.spam);
     s.jitter_pct = clamp_f(s.jitter_pct, 0.0, MAX_JITTER_PCT, 0.0);
     s.stop_hotkey.truncate(6);
@@ -566,6 +576,24 @@ mod tests {
         assert!(s.start_minimized && !s.auto_check_updates);
         let d = Settings::default();
         assert!(!d.start_minimized && d.auto_check_updates);
+    }
+
+    #[test]
+    fn window_pos_default_compat_and_bounds() {
+        let t = Tmp::new();
+        // config 3.3.1 : sans window_pos
+        std::fs::write(t.file(), r#"{"pin":true}"#).unwrap();
+        assert_eq!(load_from(&t.file()).window_pos, None);
+        std::fs::write(t.file(), r#"{"window_pos":[-1920,40]}"#).unwrap();
+        assert_eq!(load_from(&t.file()).window_pos, Some((-1920, 40)));
+        let mut s = Settings { window_pos: Some((100_001, 0)), ..Settings::default() };
+        sanitize(&mut s);
+        assert_eq!(s.window_pos, None);
+        s.window_pos = Some((0, -100_000));
+        sanitize(&mut s);
+        assert_eq!(s.window_pos, Some((0, -100_000)));
+        // la réinitialisation oublie la position
+        assert_eq!(reset_keep_profiles(&Settings { window_pos: Some((5, 5)), ..Settings::default() }).window_pos, None);
     }
 
     #[test]
