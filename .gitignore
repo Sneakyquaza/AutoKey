@@ -1,5 +1,7 @@
 /target
 *.exe
 *.exe.sha256
-.claude/settings.local.json
-.claude/worktrees/
+
+# Claude Code files (local only)
+CLAUDE.md
+.claude/
