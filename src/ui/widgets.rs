@@ -26,6 +26,18 @@ pub(super) fn text_width(p: &Painter, s: &str, size: f32, w: W) -> f32 {
     p.layout_no_wrap(s.to_string(), font(size, w), TEXT).size().x
 }
 
+/// Texte tronqué avec « … » pour tenir dans `maxw`
+pub(super) fn fit_text(p: &Painter, s: &str, size: f32, w: W, maxw: f32) -> String {
+    if text_width(p, s, size, w) <= maxw {
+        return s.to_string();
+    }
+    let mut t: String = s.to_string();
+    while !t.is_empty() && text_width(p, &format!("{t}…"), size, w) > maxw {
+        t.pop();
+    }
+    format!("{}…", t.trim_end())
+}
+
 pub(super) fn wrapped(p: &Painter, r: Rect, s: &str, size: f32, w: W, color: Color32, center: bool) {
     let mut job = egui::text::LayoutJob::simple(s.to_string(), font(size, w), color, r.width());
     if center {
@@ -77,6 +89,7 @@ pub(super) enum Ic {
     Spark,
     Loop,
     Keyboard,
+    Edit,
 }
 
 pub(super) fn icon(p: &Painter, ic: Ic, c: Pos2, size: f32, color: Color32) {
@@ -167,6 +180,7 @@ pub(super) fn icon(p: &Painter, ic: Ic, c: Pos2, size: f32, color: Color32) {
             poly(pts);
             poly(vec![end + vec2(-s * 0.16, -s * 0.02), end, end + vec2(-s * 0.02, -s * 0.16)]);
         }
+        Ic::Edit => poly(vec![pt(0.24, 0.76), pt(0.28, 0.6), pt(0.62, 0.26), pt(0.74, 0.38), pt(0.4, 0.72), pt(0.24, 0.76)]),
         Ic::Keyboard => {
             p.rect_stroke(Rect::from_min_max(pt(0.12, 0.3), pt(0.88, 0.72)), s * 0.07, st);
             line(pt(0.32, 0.6), pt(0.68, 0.6));

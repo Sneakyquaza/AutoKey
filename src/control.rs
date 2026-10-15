@@ -1,6 +1,6 @@
 //! État partagé + contrôleur : reçoit les touches physiques (hook global), gère
 //! l'enregistrement des raccourcis et le démarrage/arrêt, même fenêtre en arrière-plan.
-use crate::config::{self, HkMode, Mode, Settings, Step};
+use crate::config::{self, HkMode, Mode, Profile, Settings, Step};
 use crate::engine::{CStep, Job, Keyboard, Runner};
 use crate::keys::{combo_sort, KeySpec, RawKey};
 use std::collections::HashSet;
@@ -176,6 +176,113 @@ impl Shared {
             Step::Wait { .. } => None,
         }));
         hotkeys.iter().any(|(o, h)| *o != t && same(h, keys)) || action_keys.into_iter().any(|k| has(keys, k.vk))
+    }
+
+    // ---------------------------------------------------------------- profils
+    fn flash_msg(&self, k: &'static str) {
+        *self.flash.lock().unwrap() = Some((k, std::time::Instant::now()));
+        self.repaint();
+    }
+
+    /// Vrai si une touche d'action du profil (spam ou étape) est un raccourci en vigueur
+    fn profile_conflicts(s: &Settings, p: &Profile) -> bool {
+        let keys = std::iter::once(&p.spam.key).chain(p.pattern.steps.iter().filter_map(|st| match st {
+            Step::Hold { key, .. } | Step::Press { key, .. } => Some(key),
+            Step::Wait { .. } => None,
+        }));
+        keys.into_iter().any(|k| Self::conflicts(s, Target::SpamKey, std::slice::from_ref(k)))
+    }
+
+    /// Instantané du réglage courant (spam + pattern) sous un nom
+    fn snapshot(s: &Settings, name: String) -> Profile {
+        Profile { name, spam: s.spam.clone(), pattern: s.pattern.clone() }
+    }
+
+    /// Enregistre l'état courant : nouveau profil (`None`) ou écrasement de `idx`
+    pub fn save_profile(&self, idx: Option<usize>, default_name: String) {
+        let err = {
+            let mut s = self.settings.lock().unwrap();
+            if s.pattern.steps.len() > config::MAX_PROFILE_STEPS {
+                Some("prof_too_big")
+            } else {
+                match idx {
+                    Some(i) if i < s.profiles.len() => {
+                        let name = s.profiles[i].name.clone();
+                        s.profiles[i] = Self::snapshot(&s, name);
+                        None
+                    }
+                    Some(_) => None,
+                    None if s.profiles.len() >= config::MAX_PROFILES => Some("prof_full"),
+                    None => {
+                        let p = Self::snapshot(&s, config::clean_profile_name(&default_name, "Profil"));
+                        s.profiles.push(p);
+                        s.active_profile = Some(s.profiles.len() - 1);
+                        None
+                    }
+                }
+            }
+        };
+        match err {
+            Some(k) => self.flash_msg(k),
+            None => self.mark_dirty(),
+        }
+    }
+
+    /// Charge le profil `i` (tout sauf les raccourcis). Refusé en cas de conflit de touches ;
+    /// la tâche en cours est arrêtée d'abord (aucune touche laissée enfoncée).
+    pub fn load_profile(&self, i: usize) {
+        let conflict = {
+            let s = self.settings.lock().unwrap();
+            match s.profiles.get(i) {
+                None => return,
+                Some(p) => Self::profile_conflicts(&s, p),
+            }
+        };
+        if conflict {
+            self.flash_msg("hk_conflict");
+            return;
+        }
+        self.runner.stop();
+        self.cancel_record();
+        {
+            let mut s = self.settings.lock().unwrap();
+            let Some(p) = s.profiles.get(i).cloned() else { return };
+            let (hk, mode) = (s.spam.hotkey.clone(), s.spam.hk_mode);
+            s.spam = p.spam;
+            s.spam.hotkey = hk;
+            s.spam.hk_mode = mode;
+            let (hk, mode) = (s.pattern.hotkey.clone(), s.pattern.hk_mode);
+            s.pattern = p.pattern;
+            s.pattern.hotkey = hk;
+            s.pattern.hk_mode = mode;
+            s.active_profile = Some(i);
+        }
+        self.mark_dirty();
+    }
+
+    pub fn rename_profile(&self, i: usize, name: &str) {
+        {
+            let mut s = self.settings.lock().unwrap();
+            let Some(p) = s.profiles.get_mut(i) else { return };
+            p.name = config::clean_profile_name(name, &p.name.clone());
+        }
+        self.mark_dirty();
+    }
+
+    pub fn delete_profile(&self, i: usize) {
+        {
+            let mut s = self.settings.lock().unwrap();
+            if i >= s.profiles.len() {
+                return;
+            }
+            s.profiles.remove(i);
+            s.active_profile = match s.active_profile {
+                Some(a) if a == i => None,
+                Some(a) if a > i => Some(a - 1),
+                a => a,
+            };
+        }
+        self.mark_dirty();
     }
 
     fn commit(&self, t: Target, keys: Vec<KeySpec>) {
@@ -527,5 +634,88 @@ mod tests {
         assert!(sh.is_running(Mode::Pattern));
         sh.handle(ev(0x75, false));
         sh.handle(ev(0xA0, false));
+    }
+
+    fn profile(name: &str, key: u16) -> Profile {
+        let mut p = Profile { name: name.into(), ..Default::default() };
+        p.spam.key = KeySpec::vk(key);
+        p.spam.value = 250.0;
+        p.pattern.steps = vec![Step::Hold { key: KeySpec::vk(0x5A), value: 1.0, unit: config::Unit::S }];
+        p.pattern.hotkey = vec![KeySpec::vk(0x70)];
+        p
+    }
+
+    #[test]
+    fn load_profile_keeps_hotkeys() {
+        let (sh, _) = setup();
+        {
+            let mut s = sh.settings.lock().unwrap();
+            s.profiles = vec![profile("A", 0x51)];
+            s.spam.hk_mode = HkMode::Hold;
+        }
+        sh.load_profile(0);
+        let s = sh.settings.lock().unwrap();
+        assert_eq!((s.spam.key.vk, s.spam.value), (0x51, 250.0));
+        assert_eq!(s.pattern.steps.len(), 1);
+        assert_eq!(s.spam.hotkey, vec![KeySpec::vk(0x75)], "raccourci spam conservé");
+        assert_eq!(s.pattern.hotkey, vec![KeySpec::vk(0x76)], "raccourci pattern conservé");
+        assert_eq!(s.spam.hk_mode, HkMode::Hold);
+        assert_eq!(s.active_profile, Some(0));
+    }
+
+    #[test]
+    fn load_profile_refused_on_conflict() {
+        let (sh, _) = setup();
+        sh.settings.lock().unwrap().profiles = vec![profile("A", 0x75)]; // F6 = raccourci spam
+        let before = sh.settings.lock().unwrap().spam.key.clone();
+        sh.load_profile(0);
+        let s = sh.settings.lock().unwrap();
+        assert_eq!(s.spam.key, before);
+        assert_eq!(s.active_profile, None);
+        assert_eq!(sh.flash.lock().unwrap().as_ref().map(|f| f.0), Some("hk_conflict"));
+        drop(s);
+        // touche d'étape = raccourci d'arrêt (F8)
+        let mut p = profile("B", 0x51);
+        p.pattern.steps = vec![Step::Press { key: KeySpec::vk(0x77), count: 1, gap: 0.0 }];
+        sh.settings.lock().unwrap().profiles = vec![p];
+        sh.load_profile(0);
+        assert_eq!(sh.settings.lock().unwrap().active_profile, None);
+    }
+
+    #[test]
+    fn load_profile_stops_running_task() {
+        let (sh, _) = setup();
+        sh.settings.lock().unwrap().profiles = vec![profile("A", 0x51)];
+        sh.start(Mode::Spam);
+        assert!(sh.is_running(Mode::Spam));
+        sh.load_profile(0);
+        assert!(!sh.is_running(Mode::Spam));
+    }
+
+    #[test]
+    fn save_rename_delete_profiles() {
+        let (sh, _) = setup();
+        sh.save_profile(None, "Un".into());
+        sh.save_profile(None, "Deux".into());
+        sh.settings.lock().unwrap().spam.value = 777.0;
+        sh.save_profile(Some(0), String::new());
+        sh.rename_profile(0, "  Renommé  ");
+        {
+            let s = sh.settings.lock().unwrap();
+            assert_eq!((s.profiles[0].name.as_str(), s.profiles[0].spam.value), ("Renommé", 777.0));
+            assert_eq!(s.active_profile, Some(1));
+        }
+        sh.delete_profile(0);
+        {
+            let s = sh.settings.lock().unwrap();
+            assert_eq!((s.profiles.len(), s.active_profile), (1, Some(0)));
+        }
+        sh.delete_profile(0);
+        assert_eq!(sh.settings.lock().unwrap().active_profile, None);
+        // trop d'étapes pour un profil : refusé
+        sh.settings.lock().unwrap().pattern.steps = vec![Step::new_wait(); config::MAX_PROFILE_STEPS + 1];
+        sh.save_profile(None, "X".into());
+        assert!(sh.settings.lock().unwrap().profiles.is_empty());
+        assert_eq!(sh.flash.lock().unwrap().as_ref().map(|f| f.0), Some("prof_too_big"));
     }
 }

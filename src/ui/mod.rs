@@ -32,6 +32,11 @@ enum Act {
     StepsChanged,
     SavePreset,
     OpenPreset,
+    ProfileNew,
+    ProfileOverwrite(usize),
+    ProfileLoad(usize),
+    ProfileRename(usize, String),
+    ProfileDelete(usize),
 }
 
 pub struct App {
@@ -40,6 +45,13 @@ pub struct App {
     lang_open: bool,
     settings_open: bool,
     confirm_clear: bool,
+    profiles_open: bool,
+    /// Profil en cours de renommage (index, saisie)
+    prof_rename: Option<(usize, String)>,
+    /// Profil dont la suppression attend confirmation
+    confirm_profile: Option<usize>,
+    /// Premier profil visible dans la liste (défilement)
+    prof_scroll: usize,
     last_active: i32,
     frames: u64,
     dirty_since: Option<Instant>,
@@ -55,6 +67,10 @@ impl App {
             lang_open: false,
             settings_open: false,
             confirm_clear: false,
+            profiles_open: false,
+            prof_rename: None,
+            confirm_profile: None,
+            prof_scroll: 0,
             last_active: -1,
             frames: 0,
             dirty_since: None,
@@ -81,6 +97,11 @@ impl App {
     #[cfg(feature = "shots")]
     pub fn open_settings_for_shots(&mut self, on: bool) {
         self.settings_open = on;
+    }
+
+    #[cfg(feature = "shots")]
+    pub fn open_profiles_for_shots(&mut self, on: bool) {
+        self.profiles_open = on;
     }
 
     fn apply(&mut self, ctx: &egui::Context, a: Act) {
@@ -122,6 +143,15 @@ impl App {
                     }
                 }
             }
+            Act::ProfileNew => {
+                let n = self.sh.settings.lock().unwrap().profiles.len() + 1;
+                let lang = self.sh.settings.lock().unwrap().lang;
+                self.sh.save_profile(None, trf(lang, "prof_default", &[("n", n.to_string())]));
+            }
+            Act::ProfileOverwrite(i) => self.sh.save_profile(Some(i), String::new()),
+            Act::ProfileLoad(i) => self.sh.load_profile(i),
+            Act::ProfileRename(i, name) => self.sh.rename_profile(i, &name),
+            Act::ProfileDelete(i) => self.sh.delete_profile(i),
             Act::OpenPreset => {
                 let picked = crate::platform::pick_open();
                 crate::platform::trim_memory();
@@ -212,7 +242,7 @@ impl App {
         self.footer(ui, foot, s);
         ui.painter().rect_stroke(full.shrink(0.5), 0.0, sk(1.0, LINE));
 
-        if self.lang_open || self.settings_open || self.confirm_clear {
+        if self.lang_open || self.settings_open || self.profiles_open || self.confirm_clear || self.confirm_profile.is_some() {
             let ctx = ui.ctx().clone();
             egui::Area::new(Id::new("overlay")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
                 ui.set_min_size(full.size());
@@ -222,7 +252,10 @@ impl App {
                 if self.settings_open {
                     self.settings_popup(ui, full, s, rec, acts);
                 }
-                if self.confirm_clear {
+                if self.profiles_open {
+                    self.profiles_popup(ui, full, s, acts);
+                }
+                if self.confirm_clear || self.confirm_profile.is_some() {
                     self.confirm_modal(ui, full, s, acts);
                 }
             });

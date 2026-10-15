@@ -156,7 +156,26 @@ pub struct Settings {
     pub jitter_pct: f64,
     /// Bip au démarrage / à l'arrêt
     pub beep: bool,
+    /// Configurations nommées (spam + pattern ; les raccourcis restent globaux)
+    pub profiles: Vec<Profile>,
+    /// Index du profil actif dans `profiles`
+    pub active_profile: Option<usize>,
 }
+
+/// Configuration nommée : seuls la touche/cadence du spam et le pattern sont rechargés,
+/// les raccourcis (`hotkey`, `hk_mode`) restent ceux de `Settings`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Profile {
+    pub name: String,
+    pub spam: SpamCfg,
+    pub pattern: PatternCfg,
+}
+
+pub const MAX_PROFILES: usize = 20;
+pub const MAX_PROFILE_NAME: usize = 32;
+/// Étapes max par profil : 20 profils × 100 + le pattern courant (500) tiennent dans les 1 Mo du fichier
+pub const MAX_PROFILE_STEPS: usize = 100;
 
 /// Durée d'appui par défaut (ms)
 pub const DEFAULT_PRESS_MS: f64 = 20.0;
@@ -175,6 +194,8 @@ impl Default for Settings {
             stop_hotkey: vec![KeySpec::vk(0x77)],
             jitter_pct: 0.0,
             beep: false,
+            profiles: vec![],
+            active_profile: None,
         }
     }
 }
@@ -238,21 +259,48 @@ pub fn sanitize_pattern(p: &mut PatternCfg) {
     }
 }
 
-pub fn sanitize(s: &mut Settings) {
-    s.spam.value = clamp_f(s.spam.value, 0.0, 999_999.0, 100.0);
-    if secs(s.spam.value, s.spam.unit) < MIN_INTERVAL_S {
-        s.spam.value = MIN_INTERVAL_S / s.spam.unit.factor();
+pub fn sanitize_spam(sp: &mut SpamCfg) {
+    sp.value = clamp_f(sp.value, 0.0, 999_999.0, 100.0);
+    if secs(sp.value, sp.unit) < MIN_INTERVAL_S {
+        sp.value = MIN_INTERVAL_S / sp.unit.factor();
     }
-    s.spam.limit = match s.spam.limit {
+    sp.limit = match sp.limit {
         SpamLimit::None => SpamLimit::None,
         SpamLimit::Count(n) => SpamLimit::Count(n.clamp(1, MAX_LIMIT_COUNT)),
         SpamLimit::Duration(d) => SpamLimit::Duration(clamp_f(d, MIN_LIMIT_S, MAX_LIMIT_S, 60.0)),
     };
+    sp.hotkey.truncate(6);
+}
+
+/// Nom de profil : espaces rognés, ≤ 32 caractères (pas octets) ; vide → `fallback`
+pub fn clean_profile_name(name: &str, fallback: &str) -> String {
+    let n: String = name.trim().chars().take(MAX_PROFILE_NAME).collect();
+    let n = n.trim_end().to_string();
+    if n.is_empty() {
+        fallback.to_string()
+    } else {
+        n
+    }
+}
+
+fn sanitize_profiles(s: &mut Settings) {
+    s.profiles.truncate(MAX_PROFILES);
+    for (i, p) in s.profiles.iter_mut().enumerate() {
+        p.name = clean_profile_name(&p.name, &format!("Profil {}", i + 1));
+        sanitize_spam(&mut p.spam);
+        sanitize_pattern(&mut p.pattern);
+        p.pattern.steps.truncate(MAX_PROFILE_STEPS);
+    }
+    s.active_profile = s.active_profile.filter(|&i| i < s.profiles.len());
+}
+
+pub fn sanitize(s: &mut Settings) {
+    sanitize_spam(&mut s.spam);
     s.jitter_pct = clamp_f(s.jitter_pct, 0.0, MAX_JITTER_PCT, 0.0);
-    s.spam.hotkey.truncate(6);
     s.stop_hotkey.truncate(6);
     s.press_ms = clamp_f(s.press_ms, 0.0, MAX_PRESS_MS, DEFAULT_PRESS_MS);
     sanitize_pattern(&mut s.pattern);
+    sanitize_profiles(s);
     // arrêt d'urgence (F8 par défaut) en conflit avec un réglage existant : désactivé plutôt que d'interférer
     let vks = |v: &[KeySpec]| v.iter().map(|k| k.vk).collect::<std::collections::BTreeSet<u16>>();
     let stop = vks(&s.stop_hotkey);
@@ -521,5 +569,51 @@ mod tests {
         std::fs::write(t.file(), "[1,2").unwrap();
         load_from(&t.file());
         assert_eq!(std::fs::read_to_string(&bad).unwrap(), "[1,2");
+    }
+
+    #[test]
+    fn sanitize_profiles_bounds() {
+        let mut s = Settings { profiles: (0..25).map(|i| Profile { name: format!("  p{i}  "), ..Default::default() }).collect(), ..Default::default() };
+        s.profiles[1].name = "   ".into();
+        s.profiles[2].name = "é".repeat(50);
+        s.profiles[3].pattern.steps = vec![Step::new_wait(); 300];
+        s.profiles[3].spam.value = f64::NAN;
+        s.active_profile = Some(30);
+        sanitize(&mut s);
+        assert_eq!(s.profiles.len(), MAX_PROFILES);
+        assert_eq!(s.profiles[0].name, "p0");
+        assert_eq!(s.profiles[1].name, "Profil 2");
+        assert_eq!(s.profiles[2].name.chars().count(), MAX_PROFILE_NAME);
+        assert_eq!(s.profiles[3].pattern.steps.len(), MAX_PROFILE_STEPS);
+        assert_eq!(s.profiles[3].spam.value, 100.0);
+        assert_eq!(s.active_profile, None);
+        s.active_profile = Some(19);
+        sanitize(&mut s);
+        assert_eq!(s.active_profile, Some(19));
+    }
+
+    #[test]
+    fn old_config_without_profiles() {
+        let mut s: Settings = serde_json::from_str(r#"{"lang":"en","press_ms":30}"#).unwrap();
+        sanitize(&mut s);
+        assert!(s.profiles.is_empty());
+        assert_eq!(s.active_profile, None);
+    }
+
+    #[test]
+    fn full_profiles_fit_in_file_limit() {
+        let mut s = Settings::default();
+        let step = Step::Hold { key: KeySpec::vk(0x5A), value: 999_999.0, unit: Unit::S };
+        s.pattern.steps = vec![step.clone(); 500];
+        s.profiles = (0..MAX_PROFILES)
+            .map(|i| Profile {
+                name: format!("{i:>32}"),
+                pattern: PatternCfg { steps: vec![step.clone(); MAX_PROFILE_STEPS], ..Default::default() },
+                ..Default::default()
+            })
+            .collect();
+        sanitize(&mut s);
+        let len = serde_json::to_string_pretty(&s).unwrap().len() as u64;
+        assert!(len < MAX_FILE * 3 / 4, "{len} octets");
     }
 }

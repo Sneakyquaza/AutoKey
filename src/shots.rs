@@ -12,7 +12,7 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 12] = [
+const SCENES: [&str; 14] = [
     "spam_fr",
     "spam_rec_en",
     "pattern_empty",
@@ -25,6 +25,8 @@ const SCENES: [&str; 12] = [
     "settings",
     "spam_limit_pt",
     "settings_pt",
+    "profiles_pt",
+    "profiles_en",
 ];
 
 pub fn init(app: &mut App) {
@@ -45,7 +47,25 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
     sh.cancel_record();
     let mut s = sh.settings.lock().unwrap();
     s.lang = Lang::Fr;
+    s.profiles.clear();
+    s.active_profile = None;
     match name {
+        "profiles_pt" => {
+            s.mode = Mode::Spam;
+            s.lang = Lang::Pt;
+            for n in ["Farm de recursos", "Perfil de combate com nome muito longo para caber", "Pesca"] {
+                s.profiles.push(config::Profile { name: n.into(), ..Default::default() });
+            }
+            s.active_profile = Some(1);
+        }
+        "profiles_en" => {
+            s.mode = Mode::Pattern;
+            s.lang = Lang::En;
+            for i in 1..=9 {
+                s.profiles.push(config::Profile { name: format!("Profile {i}"), ..Default::default() });
+            }
+            s.active_profile = Some(2);
+        }
         "spam_fr" => s.mode = Mode::Spam,
         "spam_rec_en" => {
             s.mode = Mode::Spam;
@@ -127,10 +147,14 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         if st.frame == 0 {
             app.open_confirm_for_shots(false);
             app.open_settings_for_shots(false);
+            app.open_profiles_for_shots(false);
             setup(app, ctx, SCENES[st.scene]);
         }
         if SCENES[st.scene].starts_with("settings") && st.frame == 1 {
             app.open_settings_for_shots(true);
+        }
+        if SCENES[st.scene].starts_with("profiles") && st.frame == 1 {
+            app.open_profiles_for_shots(true);
         }
         if SCENES[st.scene] == "modal" && st.frame == 1 {
             app.open_confirm_for_shots(true);
