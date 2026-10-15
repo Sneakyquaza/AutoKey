@@ -221,8 +221,8 @@ impl Shared {
 
     /// Évènement clavier pendant la capture. Vrai si la capture est active (évènement consommé).
     /// Ni raccourci spam/pattern ne se déclenche ; ces touches ne sont pas enregistrées.
-    /// Le raccourci d'arrêt termine la capture et ses touches sont retirées de la macro
-    /// (approximation : une touche partagée avec le combo d'arrêt, ex. Ctrl, perd son appui).
+    /// Le raccourci d'arrêt termine la capture ; les touches de tous les raccourcis (y compris
+    /// celles d'un combo, ex. Ctrl) ne sont jamais enregistrées.
     fn handle_macro(&self, ev: &RawKey, now: Instant) -> bool {
         if !self.macro_active() {
             return false;
@@ -244,18 +244,10 @@ impl Shared {
         let mut g = self.macro_rec.lock().unwrap();
         let Some(m) = g.as_mut() else { return true };
         if ev.down && full && stop_keys.contains(&id) {
-            for vk in &stop_keys {
-                if let Some(i) = m.events.iter().rposition(|e| e.1.vk == *vk && e.2) {
-                    let mut idx = 0;
-                    m.events.retain(|e| {
-                        idx += 1;
-                        idx - 1 < i || e.1.vk != *vk
-                    });
-                }
-            }
             drop(g);
             self.stop_macro(now);
-        } else if !(hk_keys.contains(&id) && !stop_keys.contains(&id)) {
+        } else if !hk_keys.contains(&id) && !stop_keys.contains(&id) {
+            // une touche de raccourci n'est jamais enregistrée : une étape la contenant violerait `conflicts`
             m.events.push((now, ev.key.clone(), ev.down));
             drop(g);
             self.repaint();
@@ -274,7 +266,7 @@ impl Shared {
     /// Vrai si l'enregistrement de `keys` pour `t` créerait un conflit : deux raccourcis identiques,
     /// un raccourci contenant une touche de spam/d'étape (nos propres frappes sont ignorées), ou
     /// une touche de spam/d'étape appartenant à un raccourci.
-    fn conflicts(s: &Settings, t: Target, keys: &[KeySpec]) -> bool {
+    pub fn conflicts(s: &Settings, t: Target, keys: &[KeySpec]) -> bool {
         let hotkeys: [(Target, &Vec<KeySpec>); 3] =
             [(Target::SpamHotkey, &s.spam.hotkey), (Target::PatHotkey, &s.pattern.hotkey), (Target::StopHotkey, &s.stop_hotkey)];
         let has = |v: &[KeySpec], vk: u16| v.iter().any(|k| k.vk == vk);
@@ -874,6 +866,21 @@ mod tests {
         // après la capture, les raccourcis refonctionnent
         sh.handle_at(ev(0x76, true), at(2000));
         assert!(sh.is_running(Mode::Pattern));
+    }
+
+    #[test]
+    fn macro_capture_never_records_hotkey_keys() {
+        let (sh, _) = setup();
+        sh.settings.lock().unwrap().stop_hotkey = vec![KeySpec::vk(0xA2), KeySpec::vk(0x77)]; // Ctrl+F8
+        sh.toggle_macro();
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        for (vk, d, ms) in [(0xA2, true, 0), (0x43, true, 10), (0x43, false, 60), (0xA2, false, 100), (0xA2, true, 400), (0x77, true, 450)] {
+            sh.handle_at(ev(vk, d), at(ms));
+        }
+        assert!(!sh.macro_active());
+        let steps = sh.take_macro_out().unwrap();
+        assert!(steps.iter().all(|s| !matches!(s, Step::Hold { key, .. } | Step::Press { key, .. } if key.vk == 0xA2 || key.vk == 0x77)), "{steps:?}");
     }
 
     #[test]

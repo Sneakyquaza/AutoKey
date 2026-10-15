@@ -174,6 +174,20 @@ impl App {
                 if let Some(path) = picked {
                     let parsed = config::read_pattern_file(&path);
                     match parsed {
+                        // une étape ne peut pas utiliser une touche de raccourci (cf. `Shared::conflicts`)
+                        Some(f)
+                            if {
+                                let s = self.sh.settings.lock().unwrap();
+                                f.pattern.steps.iter().any(|st| match st {
+                                    Step::Hold { key, .. } | Step::Press { key, .. } => {
+                                        crate::control::Shared::conflicts(&s, crate::control::Target::SpamKey, std::slice::from_ref(key))
+                                    }
+                                    Step::Wait { .. } => false,
+                                })
+                            } =>
+                        {
+                            *self.sh.flash.lock().unwrap() = Some(("hk_conflict", Instant::now()))
+                        }
                         Some(f) => {
                             self.sh.runner.stop();
                             self.sh.cancel_record();

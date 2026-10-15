@@ -139,6 +139,8 @@ impl Stop {
 pub struct Runner {
     kb: Arc<dyn Keyboard>,
     cur: Mutex<Option<(Arc<Stop>, JoinHandle<()>)>>,
+    /// Sérialise start/stop (UI et raccourcis concurrents : sinon un thread orphelin resterait sans arrêt possible)
+    ctl: Mutex<()>,
     pub status: Arc<Status>,
     /// Bip au démarrage / à l'arrêt effectifs d'une tâche
     pub beep: AtomicBool,
@@ -146,7 +148,7 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(kb: Arc<dyn Keyboard>) -> Self {
-        Runner { kb, cur: Mutex::new(None), status: Arc::new(Status::default()), beep: AtomicBool::new(false) }
+        Runner { kb, cur: Mutex::new(None), ctl: Mutex::new(()), status: Arc::new(Status::default()), beep: AtomicBool::new(false) }
     }
 
     pub fn running(&self) -> bool {
@@ -159,6 +161,11 @@ impl Runner {
     }
 
     pub fn stop(&self) {
+        let _c = self.ctl.lock().unwrap_or_else(|e| e.into_inner());
+        self.stop_locked();
+    }
+
+    fn stop_locked(&self) {
         let cur = self.cur.lock().unwrap().take();
         if let Some((stop, h)) = cur {
             stop.set();
@@ -173,7 +180,8 @@ impl Runner {
 
     /// Comme `start`, avec une fenêtre cible optionnelle (pause hors focus, arrêt si fermée)
     pub fn start_bound(&self, job: Job, focus: Option<Arc<dyn Focus>>) {
-        self.stop();
+        let _c = self.ctl.lock().unwrap_or_else(|e| e.into_inner());
+        self.stop_locked();
         let st = &self.status;
         st.count.store(0, SeqCst);
         st.loop_i.store(0, SeqCst);

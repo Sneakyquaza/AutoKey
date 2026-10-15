@@ -210,7 +210,8 @@ mod win {
 
         /// État voulu (appelé à chaque image de l'UI) : ne réveille le thread que si quelque chose a changé
         pub fn sync(on: bool, l: Lang, spam: bool, pat: bool) {
-            let changed = ON.swap(on, SeqCst) != on || LANG.swap(l as u8, SeqCst) != l as u8 || SPAM.swap(spam, SeqCst) != spam || PAT.swap(pat, SeqCst) != pat;
+            let c = [ON.swap(on, SeqCst) != on, LANG.swap(l as u8, SeqCst) != l as u8, SPAM.swap(spam, SeqCst) != spam, PAT.swap(pat, SeqCst) != pat];
+            let changed = c.contains(&true);
             if !changed {
                 return;
             }
@@ -232,7 +233,19 @@ mod win {
             d
         }
 
+        /// Icône chargée une seule fois (le Shell en garde une copie ; pas de fuite à chaque mise à jour)
         fn load_icon() -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
+            static ICON: AtomicIsize = AtomicIsize::new(0);
+            let c = ICON.load(SeqCst);
+            if c != 0 {
+                return c as _;
+            }
+            let ic = load_icon_raw();
+            ICON.store(ic as isize, SeqCst);
+            ic
+        }
+
+        fn load_icon_raw() -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
             unsafe {
                 let hinst = GetModuleHandleW(std::ptr::null());
                 let ic = LoadImageW(hinst, ICON_ID as *const u16, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
@@ -595,8 +608,16 @@ pub fn hires(on: bool) {
 pub fn beep(start: bool) {
     #[cfg(windows)]
     {
-        let (f, ms) = if start { (1000, 60) } else { (600, 80) };
-        std::thread::spawn(move || win::beep(f, ms));
+        // un seul bip à la fois : pas de cascade de threads si on démarre / arrête en rafale
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        static BUSY: AtomicBool = AtomicBool::new(false);
+        if !BUSY.swap(true, SeqCst) {
+            let (f, ms) = if start { (1000, 60) } else { (600, 80) };
+            std::thread::spawn(move || {
+                win::beep(f, ms);
+                BUSY.store(false, SeqCst);
+            });
+        }
     }
     #[cfg(not(windows))]
     let _ = start;
