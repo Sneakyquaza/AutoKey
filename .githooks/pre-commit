@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Vérifications avant chaque commit (mêmes étapes que la CI, sauf cargo audit).
+# Activation : git config core.hooksPath .githooks   — contournement ponctuel : git commit --no-verify
+set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
+cd "$(git rev-parse --show-toplevel)"
+
+# docs seules : rien à vérifier
+if git diff --cached --name-only | grep -qvE '\.md$'; then :; else exit 0; fi
+
+step() { printf '\033[1;34m▶ %s\033[0m\n' "$1"; }
+step "cargo fmt --check";                      cargo fmt --check
+step "clippy Linux";                           cargo clippy --locked --all-targets --features shots -q -- -D warnings
+step "clippy Windows (x86_64-pc-windows-gnu)"; cargo clippy --locked --all-targets --features shots --target x86_64-pc-windows-gnu -q -- -D warnings
+step "cargo test";                             cargo test --locked -q
+printf '\033[1;32m✔ pre-commit OK\033[0m\n'
