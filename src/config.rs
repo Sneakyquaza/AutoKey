@@ -684,4 +684,68 @@ mod tests {
         let len = serde_json::to_string_pretty(&s).unwrap().len() as u64;
         assert!(len < MAX_FILE * 3 / 4, "{len} octets");
     }
+
+    /// config3.json telle qu'écrite par la 3.2.0 (sans aucun champ ajouté depuis)
+    const CONFIG_3_2_0: &str = r#"{"lang":"pt","pin":true,"mode":"pattern",
+        "spam":{"key":{"vk":81,"scan":16,"ext":false},"value":2.5,"unit":"s","hotkey":[{"vk":162,"scan":29,"ext":false},{"vk":117,"scan":63,"ext":false}],"hk_mode":"hold"},
+        "pattern":{"steps":[{"type":"hold","key":{"vk":90,"scan":44,"ext":false},"value":1.5,"unit":"s"},
+            {"type":"wait","value":250.0,"unit":"ms"},
+            {"type":"press","key":{"vk":69,"scan":18,"ext":false},"count":4,"gap":120.0}],
+          "loops":7,"hotkey":[{"vk":118,"scan":64,"ext":false}],"hk_mode":"toggle"},
+        "press_ms":35.0,"stop_hotkey":[{"vk":119,"scan":65,"ext":false}]}"#;
+
+    #[test]
+    fn config_3_2_0_loads_without_loss() {
+        let t = Tmp::new();
+        std::fs::write(t.file(), CONFIG_3_2_0).unwrap();
+        let s = load_from(&t.file());
+        assert!(!t.0.join("config3.bad.json").exists());
+        assert_eq!((s.lang, s.pin, s.mode), (Lang::Pt, true, Mode::Pattern));
+        assert_eq!((s.spam.key.vk, s.spam.key.scan), (81, 16));
+        assert_eq!((s.spam.value, s.spam.unit, s.spam.hk_mode), (2.5, Unit::S, HkMode::Hold));
+        assert_eq!(s.spam.hotkey.iter().map(|k| k.vk).collect::<Vec<_>>(), vec![162, 117]);
+        assert_eq!(s.pattern.loops, 7);
+        assert_eq!(s.pattern.steps.len(), 3);
+        assert_eq!(s.pattern.steps[1], Step::Wait { value: 250.0, unit: Unit::Ms });
+        assert!(matches!(&s.pattern.steps[2], Step::Press { count: 4, gap, .. } if *gap == 120.0));
+        assert_eq!(s.pattern.hotkey, vec![KeySpec { vk: 118, scan: 64, ..Default::default() }]);
+        assert_eq!((s.press_ms, s.stop_hotkey[0].vk), (35.0, 119));
+        // champs apparus depuis : valeurs par défaut
+        let d = Settings::default();
+        assert_eq!(s.spam.limit, SpamLimit::None);
+        assert_eq!((s.jitter_pct, s.beep, s.bind_window, s.tray, s.compact, s.start_minimized), (0.0, false, false, false, false, false));
+        assert_eq!(s.auto_check_updates, d.auto_check_updates);
+        assert!(s.profiles.is_empty() && s.active_profile.is_none());
+        // une sauvegarde puis relecture ne perd rien
+        save_to(&t.file(), &s).unwrap();
+        assert_eq!(load_from(&t.file()), s);
+    }
+
+    #[test]
+    fn save_load_roundtrip_all_new_fields() {
+        let t = Tmp::new();
+        let mut s = Settings { lang: Lang::En, pin: true, mode: Mode::Pattern, press_ms: 45.0, ..Default::default() };
+        s.spam.limit = SpamLimit::Duration(90.0);
+        s.spam.hk_mode = HkMode::Hold;
+        s.pattern.hk_mode = HkMode::Hold;
+        s.pattern.steps = example_steps();
+        s.jitter_pct = 17.5;
+        s.beep = true;
+        s.bind_window = true;
+        s.tray = true;
+        s.compact = true;
+        s.start_minimized = true;
+        s.auto_check_updates = false;
+        s.profiles =
+            vec![Profile { name: "Farm".into(), spam: s.spam.clone(), pattern: s.pattern.clone() }, Profile { name: "Pêche".into(), ..Default::default() }];
+        s.active_profile = Some(1);
+        s.stop_hotkey = vec![];
+        save_to(&t.file(), &s).unwrap();
+        let l = load_from(&t.file());
+        assert_eq!(l, s);
+        let mut s2 = s.clone();
+        s2.spam.limit = SpamLimit::Count(1234);
+        save_to(&t.file(), &s2).unwrap();
+        assert_eq!(load_from(&t.file()).spam.limit, SpamLimit::Count(1234));
+    }
 }

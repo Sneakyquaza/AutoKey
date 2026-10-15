@@ -648,4 +648,120 @@ pub mod tests {
         assert!(!r.running());
         assert!(log.0.lock().unwrap().is_empty());
     }
+
+    /// Journal horodaté (appuis seulement utiles pour mesurer les écarts)
+    #[derive(Default)]
+    struct Stamp(Mutex<Vec<(bool, Instant)>>);
+    impl Keyboard for Stamp {
+        fn down(&self, _: &KeySpec) {
+            self.0.lock().unwrap().push((true, Instant::now()));
+        }
+        fn up(&self, _: &KeySpec) {
+            self.0.lock().unwrap().push((false, Instant::now()));
+        }
+    }
+
+    #[test]
+    fn pattern_jitter_applies_to_wait_and_gap_within_bounds() {
+        let ts = Arc::new(Stamp::default());
+        let r = Runner::new(ts.clone());
+        // Wait 60 ms ± 50 % : écart entre deux appuis (début de boucle) dans 30..90 ms
+        r.start(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 1, 0.0, 0.0), CStep::Wait(0.06)], loops: 16, jitter: 0.5 });
+        sleep(1500);
+        assert!(!r.running());
+        let gaps = |ts: &Stamp| -> Vec<i64> {
+            let l = ts.0.lock().unwrap();
+            let d: Vec<Instant> = l.iter().filter(|e| e.0).map(|e| e.1).collect();
+            d.windows(2).map(|w| w[1].duration_since(w[0]).as_millis() as i64).collect()
+        };
+        let g = gaps(&ts);
+        assert_eq!(g.len(), 15);
+        assert!(g.iter().all(|&x| (28..=150).contains(&x)), "écarts Wait = {g:?}");
+        assert!(g.iter().max().unwrap() - g.iter().min().unwrap() > 12, "pas d'aléa sur Wait : {g:?}");
+        // écart entre coups d'un Press multiple : 40 ms ± 50 %
+        let ts = Arc::new(Stamp::default());
+        let r = Runner::new(ts.clone());
+        r.start(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 14, 0.04, 0.0)], loops: 1, jitter: 0.5 });
+        sleep(1000);
+        assert!(!r.running());
+        let g = gaps(&ts);
+        assert_eq!(g.len(), 13);
+        assert!(g.iter().all(|&x| (18..=110).contains(&x)), "écarts Press = {g:?}");
+        assert!(g.iter().max().unwrap() - g.iter().min().unwrap() > 8, "pas d'aléa sur l'écart : {g:?}");
+    }
+
+    #[test]
+    fn spam_limit_count_with_press_releases_every_key() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 0.04, press: 0.015, jitter: 0.0, limit: SpamLimit::Count(5) });
+        sleep(600);
+        assert!(!r.running());
+        let l = log.0.lock().unwrap();
+        assert_eq!(l.iter().filter(|e| e.0).count(), 5);
+        assert_eq!(l.iter().filter(|e| !e.0).count(), 5);
+        assert!(!l.last().unwrap().0, "dernière touche relâchée");
+    }
+
+    #[test]
+    fn spam_limit_duration_with_jitter_stops_in_time() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 0.05, press: 0.01, jitter: 0.5, limit: SpamLimit::Duration(0.3) });
+        sleep(150);
+        assert!(r.running());
+        sleep(450);
+        assert!(!r.running());
+        let l = log.0.lock().unwrap();
+        let d = l.iter().filter(|e| e.0).count();
+        assert!((3..=12).contains(&d), "presses = {d}");
+        assert_eq!(d, l.iter().filter(|e| !e.0).count());
+    }
+
+    #[test]
+    fn focus_pause_during_multi_press_releases_and_resumes() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        let f = mock(true);
+        r.start_bound(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 3, 0.01, 0.3)], loops: 1, jitter: 0.0 }, Some(f.clone()));
+        sleep(100);
+        f.0.store(false, SeqCst);
+        sleep(150);
+        assert_eq!(*log.0.lock().unwrap(), vec![(true, 0x45), (false, 0x45)], "relâchée dès la perte du focus");
+        sleep(150);
+        assert_eq!(log.0.lock().unwrap().len(), 2, "rien n'est envoyé en pause");
+        f.0.store(true, SeqCst);
+        sleep(1500);
+        assert!(!r.running());
+        let l = log.0.lock().unwrap();
+        // 3 coups + 1 ré-appui à la reprise, toujours équilibrés
+        assert_eq!(l.iter().filter(|e| e.0).count(), 4);
+        assert_eq!(l.iter().filter(|e| !e.0).count(), 4);
+    }
+
+    #[test]
+    fn start_bound_without_focus_behaves_like_start() {
+        let run = |bound: bool| {
+            let log = Arc::new(Log::default());
+            let r = Runner::new(log.clone());
+            let job = Job::Pattern {
+                steps: vec![CStep::Hold(KeySpec::letter('z'), 0.02), CStep::Press(KeySpec::letter('e'), 2, 0.005, 0.01)],
+                loops: 2,
+                jitter: 0.0,
+            };
+            if bound {
+                r.start_bound(job, None);
+            } else {
+                r.start(job);
+            }
+            sleep(500);
+            assert!(!r.running());
+            assert!(!r.status.paused.load(SeqCst));
+            let v = log.0.lock().unwrap().clone();
+            v
+        };
+        let (a, b) = (run(false), run(true));
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 12);
+    }
 }

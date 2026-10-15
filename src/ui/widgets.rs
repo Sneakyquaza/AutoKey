@@ -14,8 +14,8 @@ pub(super) fn spaced_text(p: &Painter, pos: Pos2, text: &str, size: f32, color: 
     r
 }
 
-pub(super) fn card_title(p: &Painter, r: Rect, text: &str) {
-    spaced_text(p, r.min + vec2(18.0, 16.0), text, 11.0, MUTED);
+pub(super) fn card_title(p: &Painter, r: Rect, text: &str) -> Rect {
+    spaced_text(p, r.min + vec2(18.0, 16.0), text, 11.0, MUTED)
 }
 
 pub(super) fn text(p: &Painter, pos: Pos2, anchor: Align2, s: &str, size: f32, w: W, color: Color32) -> Rect {
@@ -362,6 +362,11 @@ pub(super) fn info_tip(ui: &mut Ui, center: Pos2, id: Id, tip: &str) {
     tp.rect_filled(r.translate(vec2(0.0, 4.0)).expand(1.0), 10.0, Color32::from_black_alpha(90));
     tp.rect(r, 10.0, SURFACE, sk(1.0, LINE2));
     tp.galley(r.min + vec2(12.0, 10.0), g, TEXT);
+}
+
+/// « i » d'aide juste à droite du texte `after` (libellé de section) ; `key` identifie l'info-bulle (`tip.<clé>`)
+pub(super) fn tip_after(ui: &mut Ui, after: Rect, key: &str, tip: &str) {
+    info_tip(ui, pos2(after.max.x + 14.0, after.center().y), Id::new("tip").with(key), tip);
 }
 
 /// Bouton texte rectangulaire (actions des paramètres) ; `danger` = liseré rose

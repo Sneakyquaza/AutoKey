@@ -601,6 +601,7 @@ pub fn spawn_poller(shared: Arc<Shared>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SpamLimit;
     use crate::engine::tests::Log;
 
     fn ev(vk: u16, down: bool) -> RawKey {
@@ -983,5 +984,90 @@ mod tests {
         sh.toggle_macro();
         assert!(!sh.macro_active());
         assert_eq!(sh.take_macro_out().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn start_refused_during_macro_capture() {
+        let (sh, log) = setup();
+        sh.toggle_macro();
+        assert!(sh.macro_active());
+        sh.start(Mode::Spam);
+        sh.start(Mode::Pattern);
+        sh.toggle(Mode::Spam);
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        assert!(!sh.runner.running());
+        assert!(log.0.lock().unwrap().is_empty());
+        assert!(sh.macro_active(), "la capture continue");
+    }
+
+    #[test]
+    fn load_profile_cancels_macro_capture() {
+        let (sh, _) = setup();
+        sh.settings.lock().unwrap().profiles = vec![profile("A", 0x51)];
+        sh.toggle_macro();
+        sh.handle_at(ev(0x41, true), Instant::now());
+        assert!(sh.macro_active());
+        sh.load_profile(0);
+        assert!(!sh.macro_active());
+        assert!(sh.take_macro_out().is_none(), "rien d'enregistré");
+        assert_eq!(sh.settings.lock().unwrap().active_profile, Some(0));
+    }
+
+    #[test]
+    fn import_replaces_settings_and_stops_running_task() {
+        let (sh, _) = setup();
+        sh.start(Mode::Spam);
+        assert!(sh.is_running(Mode::Spam));
+        let mut src = Settings::default();
+        src.spam.key = KeySpec::vk(0x51);
+        src.pin = true;
+        src.jitter_pct = 12.0;
+        src.spam.limit = SpamLimit::Count(42);
+        let txt = serde_json::to_string(&src).unwrap();
+        let new = Shared::parse_import(&txt).unwrap();
+        sh.begin_record(Target::SpamKey);
+        sh.replace_settings(new);
+        assert!(!sh.is_running(Mode::Spam));
+        assert!(sh.recording().is_none());
+        let s = sh.settings.lock().unwrap();
+        assert_eq!(s.spam.key.vk, 0x51);
+        assert!(s.pin);
+        assert_eq!(s.jitter_pct, 12.0);
+        assert_eq!(s.spam.limit, SpamLimit::Count(42));
+        assert!(sh.dirty.load(SeqCst));
+    }
+
+    #[test]
+    fn hotkey_relaunches_after_limit_reached() {
+        for mode in [HkMode::Toggle, HkMode::Hold] {
+            let (sh, log) = setup();
+            {
+                let mut s = sh.settings.lock().unwrap();
+                s.spam.hk_mode = mode;
+                s.spam.value = 20.0;
+                s.spam.unit = config::Unit::Ms;
+                s.spam.limit = SpamLimit::Count(2);
+            }
+            let wait_end = || {
+                for _ in 0..100 {
+                    if !sh.runner.running() {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                panic!("la limite n'arrête pas la tâche");
+            };
+            sh.handle(ev(0x75, true));
+            assert!(sh.is_running(Mode::Spam), "{mode:?}");
+            wait_end();
+            let downs = |l: &Log| l.0.lock().unwrap().iter().filter(|e| e.0).count();
+            assert_eq!(downs(&log), 2);
+            sh.handle(ev(0x75, false)); // relâche : en maintien, stop_if sans effet car déjà finie
+            assert!(!sh.is_running(Mode::Spam));
+            sh.handle(ev(0x75, true)); // nouvel appui : relance (pas un « arrêt » de bascule)
+            assert!(sh.is_running(Mode::Spam) || downs(&log) > 2, "{mode:?} : pas relancé");
+            wait_end();
+            assert_eq!(downs(&log), 4, "{mode:?}");
+        }
     }
 }

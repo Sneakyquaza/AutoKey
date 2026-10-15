@@ -229,14 +229,16 @@ impl App {
         // nouveau profil
         let nb = Rect::from_min_size(r.min + vec2(6.0, 6.0), vec2(r.width() - 12.0, 36.0));
         let enabled = n < config::MAX_PROFILES;
-        let resp = ui.interact(nb, Id::new("prof_new"), if enabled { Sense::click() } else { Sense::hover() });
+        let nbi = Rect::from_min_max(nb.min, pos2(nb.max.x - 70.0, nb.max.y)); // laisse la place au « i »
+        let resp = ui.interact(nbi, Id::new("prof_new"), if enabled { Sense::click() } else { Sense::hover() });
         inside |= resp.hovered();
         let hov = enabled && resp.hovered();
         p.rect(nb, 10.0, SURFACE2, sk(1.0, if hov { VIOLET } else { LINE2 }));
         let col = if enabled { TEXT } else { DIM };
         icon(&p, Ic::Plus, pos2(nb.min.x + 22.0, nb.center().y), 16.0, if enabled { CYAN } else { DIM });
         text(&p, pos2(nb.min.x + 38.0, nb.center().y), Align2::LEFT_CENTER, tr(lang, "prof_new"), 13.0, W::S, col);
-        text(&p, pos2(nb.max.x - 12.0, nb.center().y), Align2::RIGHT_CENTER, &format!("{n}/{}", config::MAX_PROFILES), 11.0, W::S, MUTED);
+        let cnt = text(&p, pos2(nb.max.x - 12.0, nb.center().y), Align2::RIGHT_CENTER, &format!("{n}/{}", config::MAX_PROFILES), 11.0, W::S, MUTED);
+        info_tip(ui, pos2(cnt.min.x - 16.0, nb.center().y), Id::new("tip").with("profiles"), tr(lang, "tip_profiles"));
         if enabled && hand(resp).clicked() {
             acts.push(Act::ProfileNew);
         }

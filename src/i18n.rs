@@ -242,6 +242,14 @@ static T: &[(&str, [&str; 3])] = &[
     ("tip_export", ["Enregistre tous vos réglages (raccourcis, spam, pattern, profils…) dans un fichier .json.", "Saves all your settings (shortcuts, spam, pattern, profiles…) to a .json file.", "Salva todas as suas configurações (atalhos, spam, padrão, perfis…) em um arquivo .json."]),
     ("tip_import", ["Remplace tous vos réglages par ceux d'un fichier exporté. Refusé si le fichier est invalide, dépasse 1 Mo ou contient des raccourcis en conflit.", "Replaces all your settings with those of an exported file. Rejected if the file is invalid, over 1 MB or has conflicting shortcuts.", "Substitui todas as suas configurações pelas de um arquivo exportado. Recusado se o arquivo for inválido, maior que 1 MB ou tiver atalhos em conflito."]),
     ("tip_reset", ["Remet tous les réglages à leur valeur par défaut. Vos profils sont conservés.", "Puts every setting back to its default. Your profiles are kept.", "Restaura todas as configurações para o padrão. Seus perfis são mantidos."]),
+    ("tip_spam_key", ["La touche envoyée en boucle. Cliquez sur la grande touche, puis appuyez sur celle à spammer.", "The key sent over and over. Click the big key, then press the one to spam.", "A tecla enviada repetidamente. Clique na tecla grande e pressione a que quer spammar."]),
+    ("tip_interval", ["Temps entre deux appuis (minimum 10 ms). Les pastilles donnent des valeurs courantes.", "Time between two presses (minimum 10 ms). The chips give common values.", "Tempo entre dois toques (mínimo 10 ms). Os atalhos dão valores comuns."]),
+    ("tip_limit", ["Arrête le spam tout seul : Aucun = jusqu'à l'arrêt manuel, Pressions = après N appuis, Durée = après N secondes.", "Stops the spam by itself: None = until you stop it, Presses = after N presses, Duration = after N seconds.", "Para o spam sozinho: Nenhum = até você parar, Toques = após N toques, Duração = após N segundos."]),
+    ("tip_hotkey", ["Combinaison globale qui démarre/arrête la tâche. Bascule : un appui démarre, un autre arrête. Maintien : actif tant que vous la tenez.", "Global combination that starts/stops the task. Toggle: one press starts, another stops. Hold: active while you hold it.", "Combinação global que inicia/para a tarefa. Alternar: um toque inicia, outro para. Manter: ativo enquanto você segura."]),
+    ("tip_loops", ["Nombre de fois que la séquence est rejouée. Le bouton ∞ la répète jusqu'à l'arrêt.", "Number of times the sequence is replayed. The ∞ button repeats it until stopped.", "Quantas vezes a sequência é repetida. O botão ∞ repete até você parar."]),
+    ("tip_kinds", ["Maintenir : garde la touche enfoncée un temps donné. Appuyer : un appui bref. Attendre : une pause sans touche.", "Hold: keeps the key down for a set time. Press: a quick tap. Wait: a pause with no key.", "Segurar: segura a tecla por um tempo. Pressionar: um toque rápido. Esperar: uma pausa sem tecla."]),
+    ("tip_pat_tools", ["Enregistrer (rouge) : capture vos touches en direct et les convertit en étapes Maintenir / Appuyer / Attendre. Les touches de raccourci sont ignorées ; arrêtez par un nouveau clic ou le raccourci d'arrêt d'urgence.\nOuvrir / Enregistrer (disquette) : importe ou exporte le pattern dans un fichier .json.", "Record (red): captures your keys live and converts them into Hold / Press / Wait steps. Shortcut keys are ignored; stop with another click or the emergency stop shortcut.\nOpen / Save (disk): imports or exports the pattern as a .json file.", "Gravar (vermelho): captura suas teclas ao vivo e as converte em etapas Segurar / Pressionar / Esperar. Teclas de atalho são ignoradas; pare com outro clique ou com o atalho de parada de emergência.\nAbrir / Salvar (disquete): importa ou exporta o padrão em um arquivo .json."]),
+    ("tip_profiles", ["Un profil mémorise un spam et un pattern (100 étapes max). Les raccourcis globaux ne sont pas chargés avec lui.", "A profile stores a spam and a pattern (100 steps max). Global shortcuts are not loaded with it.", "Um perfil guarda um spam e um padrão (máx. 100 etapas). Os atalhos globais não são carregados com ele."]),
     ("Enter", ["Entrée", "Enter", "Enter"]),
     ("Esc", ["Échap", "Esc", "Esc"]),
     ("Del", ["Suppr", "Del", "Del"]),
@@ -367,5 +375,21 @@ mod tests {
             }
         }
         assert!(total > 20, "extraction suspecte : {total} clés");
+    }
+
+    #[test]
+    fn tip_keys_complete_used_and_short() {
+        let src = [include_str!("ui/spam.rs"), include_str!("ui/pattern.rs"), include_str!("ui/chrome.rs"), include_str!("ui/settings.rs")].concat();
+        let used = used_keys(&src);
+        let tips: Vec<_> = T.iter().filter(|(k, _)| k.starts_with("tip_")).collect();
+        assert!(tips.len() >= 25, "info-bulles manquantes : {}", tips.len());
+        for (k, v) in tips {
+            assert!(used.iter().any(|u| u == k), "info-bulle jamais affichée : {k}");
+            for (i, s) in v.iter().enumerate() {
+                assert!(s.trim().len() >= 20 && s.len() <= 420, "{k} (langue {i}) : longueur {}", s.len());
+            }
+        }
+        // aucune valeur vide, quelle que soit la langue
+        assert!(T.iter().all(|(_, v)| v.iter().all(|s| !s.is_empty())));
     }
 }

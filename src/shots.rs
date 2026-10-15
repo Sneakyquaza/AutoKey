@@ -12,7 +12,7 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 25] = [
+const SCENES: [&str; 27] = [
     "spam_fr",
     "spam_rec_en",
     "pattern_empty",
@@ -38,6 +38,8 @@ const SCENES: [&str; 25] = [
     "macro_rec_pt",
     "compact_spam_pt",
     "compact_pattern_en",
+    "spam_tip_limit_pt",
+    "pattern_tip_tools_pt",
 ];
 
 pub fn init(app: &mut App) {
@@ -116,6 +118,16 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
             s.mode = Mode::Spam;
             s.lang = Lang::Pt;
             s.compact = true;
+        }
+        "spam_tip_limit_pt" => {
+            s.mode = Mode::Spam;
+            s.lang = Lang::Pt;
+            s.spam.limit = config::SpamLimit::Count(100);
+        }
+        "pattern_tip_tools_pt" => {
+            s.mode = Mode::Pattern;
+            s.lang = Lang::Pt;
+            s.pattern.steps = config::example_steps();
         }
         "spam_limit_pt" => {
             s.mode = Mode::Spam;
@@ -225,6 +237,13 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
                     app.force_tip_for_shots(ctx, Some("bind"));
                 }
                 _ => app.scroll_settings_for_shots(0.0),
+            }
+        }
+        if st.frame == 1 {
+            match SCENES[st.scene] {
+                "spam_tip_limit_pt" => app.force_tip_for_shots(ctx, Some("spam_limit")),
+                "pattern_tip_tools_pt" => app.force_tip_for_shots(ctx, Some("pat_tools")),
+                _ => {}
             }
         }
         if SCENES[st.scene].starts_with("profiles") && st.frame == 1 {

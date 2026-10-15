@@ -39,7 +39,8 @@ impl App {
 
         // touche
         card(&p, key_r);
-        card_title(&p, key_r, tr(lang, "key"));
+        let t = card_title(&p, key_r, tr(lang, "key"));
+        tip_after(ui, t, "spam_key", tr(lang, "tip_spam_key"));
         let cap = Rect::from_min_max(key_r.min + vec2(18.0, 44.0), key_r.max - vec2(18.0, 44.0));
         let (lbl, recording) = Self::rec_label(s, rec, Target::SpamKey, s.spam.key.label(lang));
         if keycap(ui, cap, Id::new("spamkey"), &lbl, recording, CapSize::Big, lang, false).on_hover_text(tr(lang, "click_change")).clicked() {
@@ -49,7 +50,8 @@ impl App {
 
         // intervalle
         card(&p, int_r);
-        card_title(&p, int_r, tr(lang, "interval"));
+        let t = card_title(&p, int_r, tr(lang, "interval"));
+        tip_after(ui, t, "interval", tr(lang, "tip_interval"));
         text(&p, int_r.min + vec2(18.0, 52.0), Align2::LEFT_CENTER, tr(lang, "every"), 12.0, W::R, MUTED);
         let row_y = int_r.min.y + 70.0;
         let seg_w = 150.0;
@@ -72,7 +74,8 @@ impl App {
         }
         // arrêt automatique
         let ly = int_r.min.y + 192.0;
-        text(&p, pos2(int_r.min.x + 18.0, ly), Align2::LEFT_CENTER, tr(lang, "limit"), 12.0, W::R, MUTED);
+        let t = text(&p, pos2(int_r.min.x + 18.0, ly), Align2::LEFT_CENTER, tr(lang, "limit"), 12.0, W::R, MUTED);
+        tip_after(ui, t, "spam_limit", tr(lang, "tip_limit"));
         let seg_r = Rect::from_min_size(pos2(int_r.min.x + 18.0, ly + 12.0), vec2(250.0, 36.0));
         let mut kind = match s.spam.limit {
             SpamLimit::None => 0u8,
@@ -125,7 +128,8 @@ impl App {
         let lang = s.lang;
         let p = ui.painter().clone();
         card(&p, r);
-        card_title(&p, r, tr(lang, "hotkey"));
+        let t = card_title(&p, r, tr(lang, "hotkey"));
+        tip_after(ui, t, "hotkey", tr(lang, "tip_hotkey"));
         let t = if m == Mode::Spam { Target::SpamHotkey } else { Target::PatHotkey };
         let cur = if m == Mode::Spam { combo_label(&s.spam.hotkey, lang) } else { combo_label(&s.pattern.hotkey, lang) };
         let (lbl, recording) = Self::rec_label(s, rec, t, cur);

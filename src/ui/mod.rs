@@ -407,3 +407,66 @@ impl App {
         let _ = lang;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::tests::Log;
+
+    /// Dessine `frames` images de l'application sur un contexte egui sans fenêtre
+    fn draw_frames(app: &mut App, ctx: &egui::Context, size: Vec2, frames: usize) {
+        for _ in 0..frames {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() };
+            let _ = ctx.run(input, |ctx| app.update(ctx));
+        }
+    }
+
+    /// Fumée : chaque vue (spam, pattern, vue réduite, panneau Réglages, profils, confirmation)
+    /// dans chaque langue se dessine sans panique. Ignoré si la police de l'interface est absente.
+    #[test]
+    fn every_view_draws_without_panic() {
+        #[cfg(not(windows))]
+        if !std::path::Path::new("/usr/share/fonts/opentype/inter/Inter-Regular.otf").exists() {
+            eprintln!("police Inter absente : test de dessin ignoré");
+            return;
+        }
+        let ctx = egui::Context::default();
+        setup_fonts(&ctx);
+        let sh = Shared::new(Settings::default(), Arc::new(Log::default()));
+        let up = crate::update::Updater::new(sh.clone());
+        let mut app = App::new(sh.clone(), up);
+        for lang in [Lang::Fr, Lang::En, Lang::Pt] {
+            for compact in [false, true] {
+                for mode in [Mode::Spam, Mode::Pattern] {
+                    for view in 0..5 {
+                        {
+                            let mut s = sh.settings.lock().unwrap();
+                            s.lang = lang;
+                            s.compact = compact;
+                            s.mode = mode;
+                            s.pattern.steps = if view == 4 { vec![] } else { config::example_steps() };
+                            s.profiles = vec![config::Profile { name: "Profil".into(), ..Default::default() }];
+                            s.active_profile = Some(0);
+                            s.spam.limit = if view == 1 { SpamLimit::Duration(90.0) } else { SpamLimit::Count(10) };
+                        }
+                        app.settings_open = view == 2;
+                        app.profiles_open = view == 3;
+                        app.confirm_clear = false;
+                        draw_frames(&mut app, &ctx, vec2(width_for(compact), height_for(mode, compact)), 3);
+                    }
+                }
+            }
+        }
+        // capture de macro en cours et tâche en cours
+        app.settings_open = false;
+        app.profiles_open = false;
+        sh.settings.lock().unwrap().compact = false;
+        sh.settings.lock().unwrap().mode = Mode::Pattern;
+        sh.toggle_macro();
+        draw_frames(&mut app, &ctx, vec2(width_for(false), height_for(Mode::Pattern, false)), 3);
+        sh.cancel_macro();
+        sh.start(Mode::Pattern);
+        draw_frames(&mut app, &ctx, vec2(width_for(false), height_for(Mode::Pattern, false)), 3);
+        sh.runner.stop();
+    }
+}

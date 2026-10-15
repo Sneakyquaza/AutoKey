@@ -300,6 +300,20 @@ mod tests {
     }
 
     #[test]
+    fn draft_prerelease_and_malformed_ignored() {
+        let draft = REL.replace("\"draft\":false", "\"draft\":true");
+        assert!(parse_release(&draft, "me/AutoKey", 1).is_none());
+        let pre = REL.replace("\"prerelease\":false", "\"prerelease\":true");
+        assert!(parse_release(&pre, "me/AutoKey", 1).is_none());
+        // tag qui n'est pas « build-N » (ex. tag de version) : ignoré
+        assert!(parse_release(&REL.replace("build-57\",", "v3.3.1\","), "me/AutoKey", 1).is_none());
+        assert!(parse_release(&REL.replace("build-57\",", "build-x\","), "me/AutoKey", 1).is_none());
+        for bad in ["", "{", "[]", "null", r#"{"tag_name":"build-9"}"#, r#"{"tag_name":"build-9","assets":[]}"#] {
+            assert!(parse_release(bad, "me/AutoKey", 1).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
     fn foreign_urls_rejected() {
         assert!(parse_release(REL, "pirate/AutoKey", 1).is_none());
         let evil = REL.replace("https://github.com/me", "https://evil.example/me");
