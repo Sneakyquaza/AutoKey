@@ -23,6 +23,7 @@ use widgets::*;
 // ------------------------------------------------------------------ application
 enum Act {
     Record(Target),
+    MacroToggle,
     Toggle(Mode),
     SetMode(Mode),
     SetLang,
@@ -45,6 +46,8 @@ pub struct App {
     lang_open: bool,
     settings_open: bool,
     confirm_clear: bool,
+    /// Macro capturée en attente de confirmation de remplacement
+    confirm_macro: Option<Vec<Step>>,
     profiles_open: bool,
     /// Profil en cours de renommage (index, saisie)
     prof_rename: Option<(usize, String)>,
@@ -67,6 +70,7 @@ impl App {
             lang_open: false,
             settings_open: false,
             confirm_clear: false,
+            confirm_macro: None,
             profiles_open: false,
             prof_rename: None,
             confirm_profile: None,
@@ -113,6 +117,14 @@ impl App {
                     }
                 });
                 self.sh.begin_record(t);
+            }
+            Act::MacroToggle => {
+                ctx.memory_mut(|m| {
+                    if let Some(id) = m.focused() {
+                        m.surrender_focus(id)
+                    }
+                });
+                self.sh.toggle_macro();
             }
             Act::Toggle(m) => self.sh.toggle(m),
             Act::SetMode(m) => {
@@ -180,7 +192,21 @@ impl App {
     pub fn update(&mut self, ctx: &egui::Context) {
         self.frames += 1;
         let rec = self.sh.recording();
-        if rec.is_some() {
+        // macro terminée (bouton ou raccourci d'arrêt) : remplacement direct ou après confirmation
+        if let Some(steps) = self.sh.take_macro_out() {
+            if self.sh.settings.lock().unwrap().pattern.steps.is_empty() {
+                self.sh.settings.lock().unwrap().pattern.steps = steps;
+                self.sh.mark_dirty();
+            } else {
+                self.confirm_macro = Some(steps);
+            }
+        }
+        let macro_on = self.sh.macro_active();
+        if macro_on {
+            // compteur et pulsation du bouton
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        if rec.is_some() || macro_on {
             // pendant l'écoute, le clavier ne doit rien activer dans la fenêtre
             ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))));
         }
@@ -242,7 +268,7 @@ impl App {
         self.footer(ui, foot, s);
         ui.painter().rect_stroke(full.shrink(0.5), 0.0, sk(1.0, LINE));
 
-        if self.lang_open || self.settings_open || self.profiles_open || self.confirm_clear || self.confirm_profile.is_some() {
+        if self.lang_open || self.settings_open || self.profiles_open || self.confirm_clear || self.confirm_profile.is_some() || self.confirm_macro.is_some() {
             let ctx = ui.ctx().clone();
             egui::Area::new(Id::new("overlay")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
                 ui.set_min_size(full.size());
@@ -255,7 +281,7 @@ impl App {
                 if self.profiles_open {
                     self.profiles_popup(ui, full, s, acts);
                 }
-                if self.confirm_clear || self.confirm_profile.is_some() {
+                if self.confirm_clear || self.confirm_profile.is_some() || self.confirm_macro.is_some() {
                     self.confirm_modal(ui, full, s, acts);
                 }
             });

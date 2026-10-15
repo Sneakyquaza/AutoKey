@@ -296,6 +296,7 @@ impl App {
         p.rect(r, 18.0, SURFACE, sk(1.0, LINE2));
         icon(&p, Ic::Trash, pos2(r.center().x, r.min.y + 36.0), 28.0, ROSE);
         let msg = match self.confirm_profile.and_then(|i| s.profiles.get(i)) {
+            _ if self.confirm_macro.is_some() => tr(lang, "macro_replace_q").to_string(),
             Some(pf) => fit_text(&p, &trf(lang, "prof_del_q", &[("name", pf.name.clone())]), 15.0, W::S, r.width() - 32.0),
             None => tr(lang, "clear_q").to_string(),
         };
@@ -313,10 +314,15 @@ impl App {
         if rc.clicked() {
             self.confirm_clear = false;
             self.confirm_profile = None;
+            self.confirm_macro = None;
         }
         if rd.clicked() {
             match self.confirm_profile.take() {
                 Some(i) => acts.push(Act::ProfileDelete(i)),
+                None if self.confirm_macro.is_some() => {
+                    s.pattern.steps = self.confirm_macro.take().unwrap_or_default();
+                    acts.push(Act::StepsChanged);
+                }
                 None => {
                     s.pattern.steps.clear();
                     acts.push(Act::StepsChanged);
@@ -369,6 +375,10 @@ impl App {
                 );
                 msg += &elapsed;
             }
+        }
+        if let Some((n, _)) = self.sh.macro_progress() {
+            msg = trf(lang, "macro_msg", &[("n", n.to_string())]);
+            col = ROSE;
         }
         let mut flash = self.sh.flash.lock().unwrap();
         if let Some((k, t)) = *flash {

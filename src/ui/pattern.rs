@@ -15,27 +15,55 @@ impl App {
             let d = fmt_duration(lang, config::cycle_seconds(&s.pattern.steps));
             text(&p, pos2(tr_.max.x + 16.0, hy), Align2::LEFT_CENTER, &trf(lang, "cycle", &[("d", d)]), 12.0, W::S, CYAN);
         }
-        let tools: [(Ic, Color32, &str); 4] = [(Ic::Spark, AMBER, "example"), (Ic::Open, TEXT, "open"), (Ic::Save, TEXT, "save"), (Ic::Trash, TEXT, "clear")];
-        let widths: Vec<f32> = tools.iter().map(|t| text_width(&p, tr(lang, t.2), 13.0, W::S) + 48.0).collect();
-        let mut x = inner.max.x - widths.iter().sum::<f32>() - 8.0 * 3.0;
-        for (i, (ic, col, key)) in tools.iter().enumerate() {
-            let (resp, w) = tool_btn(ui, pos2(x, hy - 16.0), 32.0, Id::new("tool").with(i), *ic, *col, tr(lang, key), false);
+        if let Some((n, el)) = self.sh.macro_progress() {
+            // capture de macro en cours : seul le bouton d'arrêt (rouge, pulsé) reste
+            let label = trf(lang, "macro_stop", &[("n", n.to_string()), ("t", fmt_duration(lang, el.as_secs() as f64))]);
+            let w = text_width(&p, &label, 13.0, W::S) + 16.0 + 8.0 + 24.0;
+            let r = Rect::from_min_size(pos2(inner.max.x - w, hy - 16.0), vec2(w, 32.0));
+            let resp = hand(ui.interact(r, Id::new("tool_macro"), Sense::click()));
+            #[allow(unused_mut)]
+            let mut pulse = (ui.input(|i| i.time) * std::f64::consts::TAU / 1.2).sin() as f32 * 0.5 + 0.5;
+            #[cfg(feature = "shots")]
+            if self.shots.is_some() {
+                pulse = 1.0; // captures déterministes
+            }
+            p.rect(r, 10.0, ROSE.gamma_multiply(0.18 + 0.2 * pulse), sk(1.0, if resp.hovered() { lighten(ROSE, 0.2) } else { ROSE }));
+            icon(&p, Ic::Rec, pos2(r.min.x + 20.0, r.center().y), 16.0, lerp_c(ROSE, Color32::WHITE, pulse * 0.5));
+            text(&p, pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, &label, 13.0, W::S, TEXT);
             if resp.clicked() {
-                match *key {
-                    "example" => {
-                        s.pattern.steps = config::example_steps();
-                        acts.push(Act::StepsChanged);
-                    }
-                    "open" => acts.push(Act::OpenPreset),
-                    "save" => acts.push(Act::SavePreset),
-                    _ => {
-                        if !s.pattern.steps.is_empty() {
-                            self.confirm_clear = true;
+                acts.push(Act::MacroToggle);
+            }
+        } else {
+            let tools: [(Ic, Color32, &str); 5] =
+                [(Ic::Rec, ROSE, "macro_rec"), (Ic::Spark, AMBER, "example"), (Ic::Open, TEXT, "open"), (Ic::Save, TEXT, "save"), (Ic::Trash, TEXT, "clear")];
+            let widths: Vec<f32> = tools.iter().map(|t| text_width(&p, tr(lang, t.2), 13.0, W::S) + 48.0).collect();
+            let mut x = inner.max.x - widths.iter().sum::<f32>() - 8.0 * 4.0;
+            for (i, (ic, col, key)) in tools.iter().enumerate() {
+                let (resp, w) = tool_btn(ui, pos2(x, hy - 16.0), 32.0, Id::new("tool").with(i), *ic, *col, tr(lang, key), false);
+                let resp = if *key == "macro_rec" {
+                    let k = combo_label(&s.stop_hotkey, lang);
+                    resp.on_hover_text(trf(lang, "macro_tip", &[("k", k)]))
+                } else {
+                    resp
+                };
+                if resp.clicked() {
+                    match *key {
+                        "macro_rec" => acts.push(Act::MacroToggle),
+                        "example" => {
+                            s.pattern.steps = config::example_steps();
+                            acts.push(Act::StepsChanged);
+                        }
+                        "open" => acts.push(Act::OpenPreset),
+                        "save" => acts.push(Act::SavePreset),
+                        _ => {
+                            if !s.pattern.steps.is_empty() {
+                                self.confirm_clear = true;
+                            }
                         }
                     }
                 }
+                x += w + 8.0;
             }
-            x += w + 8.0;
         }
 
         // frise des étapes

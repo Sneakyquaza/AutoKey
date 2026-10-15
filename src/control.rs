@@ -3,9 +3,11 @@
 use crate::config::{self, HkMode, Mode, Profile, Settings, Step};
 use crate::engine::{CStep, Job, Keyboard, Runner};
 use crate::keys::{combo_sort, KeySpec, RawKey};
+use crate::macro_rec::{self, MacroRec};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering::*};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Target {
@@ -32,6 +34,10 @@ pub struct Recording {
 pub struct Shared {
     pub settings: Mutex<Settings>,
     pub rec: Mutex<Option<Recording>>,
+    /// Capture de macro en cours (exclusive avec `rec`)
+    pub macro_rec: Mutex<Option<MacroRec>>,
+    /// Résultat d'une capture terminée, en attente de reprise par l'UI
+    macro_out: Mutex<Option<Vec<Step>>>,
     pub dirty: AtomicBool,
     pub runner: Runner,
     pub flash: Mutex<Option<(&'static str, std::time::Instant)>>,
@@ -45,6 +51,8 @@ impl Shared {
         Arc::new(Shared {
             settings: Mutex::new(settings),
             rec: Mutex::new(None),
+            macro_rec: Mutex::new(None),
+            macro_out: Mutex::new(None),
             dirty: AtomicBool::new(false),
             runner: Runner::new(kb),
             flash: Mutex::new(None),
@@ -100,7 +108,7 @@ impl Shared {
     }
 
     pub fn start(&self, m: Mode) {
-        if self.is_running(m) {
+        if self.is_running(m) || self.macro_active() {
             return;
         }
         let job = {
@@ -145,8 +153,109 @@ impl Shared {
         if r.as_ref().map(|x| x.target) == Some(t) {
             *r = None; // re-clic = annuler
         } else {
+            *self.macro_rec.lock().unwrap() = None;
             *r = Some(Recording { target: t, keys: vec![], down: HashSet::new() });
         }
+    }
+
+    // ---------------------------------------------------------------- capture de macro
+    pub fn macro_active(&self) -> bool {
+        self.macro_rec.lock().unwrap().is_some()
+    }
+
+    /// Instantané de la capture (nombre d'évènements, durée) pour l'UI
+    pub fn macro_progress(&self) -> Option<(usize, std::time::Duration)> {
+        self.macro_rec.lock().unwrap().as_ref().map(|m| (m.events.len(), m.started.elapsed()))
+    }
+
+    /// Démarre (ou arrête, si déjà en cours) la capture d'une macro. Refusé si une tâche tourne.
+    pub fn toggle_macro(&self) {
+        if self.macro_active() {
+            self.stop_macro(Instant::now());
+            return;
+        }
+        if self.runner.running() {
+            self.flash_msg("macro_busy");
+            return;
+        }
+        self.cancel_record();
+        self.reset_keys();
+        *self.macro_rec.lock().unwrap() = Some(MacroRec { events: vec![], started: Instant::now() });
+        self.repaint();
+    }
+
+    pub fn cancel_macro(&self) {
+        *self.macro_rec.lock().unwrap() = None;
+    }
+
+    /// Reprend le résultat d'une capture terminée (non vide)
+    pub fn take_macro_out(&self) -> Option<Vec<Step>> {
+        self.macro_out.lock().unwrap().take()
+    }
+
+    /// Les raccourcis ne doivent pas se déclencher sur l'état « touches enfoncées » d'avant/après la capture
+    fn reset_keys(&self) {
+        self.pressed.lock().unwrap().clear();
+        *self.active.lock().unwrap() = [false; 3];
+    }
+
+    fn stop_macro(&self, now: Instant) {
+        let Some(m) = self.macro_rec.lock().unwrap().take() else { return };
+        self.reset_keys();
+        let (steps, truncated) = macro_rec::to_steps(&m.events, now);
+        if steps.is_empty() {
+            self.flash_msg("macro_empty");
+            return;
+        }
+        if truncated {
+            self.flash_msg("macro_trunc");
+        }
+        *self.macro_out.lock().unwrap() = Some(steps);
+        self.repaint();
+    }
+
+    /// Évènement clavier pendant la capture. Vrai si la capture est active (évènement consommé).
+    /// Ni raccourci spam/pattern ne se déclenche ; ces touches ne sont pas enregistrées.
+    /// Le raccourci d'arrêt termine la capture et ses touches sont retirées de la macro
+    /// (approximation : une touche partagée avec le combo d'arrêt, ex. Ctrl, perd son appui).
+    fn handle_macro(&self, ev: &RawKey, now: Instant) -> bool {
+        if !self.macro_active() {
+            return false;
+        }
+        let (stop_keys, hk_keys): (Vec<u16>, Vec<u16>) = {
+            let s = self.settings.lock().unwrap();
+            (s.stop_hotkey.iter().map(|k| k.vk).collect(), s.spam.hotkey.iter().chain(s.pattern.hotkey.iter()).map(|k| k.vk).collect())
+        };
+        let id = ev.key.vk;
+        let full = {
+            let mut p = self.pressed.lock().unwrap();
+            if ev.down {
+                p.insert(id);
+            } else {
+                p.remove(&id);
+            }
+            !stop_keys.is_empty() && stop_keys.iter().all(|v| p.contains(v))
+        };
+        let mut g = self.macro_rec.lock().unwrap();
+        let Some(m) = g.as_mut() else { return true };
+        if ev.down && full && stop_keys.contains(&id) {
+            for vk in &stop_keys {
+                if let Some(i) = m.events.iter().rposition(|e| e.1.vk == *vk && e.2) {
+                    let mut idx = 0;
+                    m.events.retain(|e| {
+                        idx += 1;
+                        idx - 1 < i || e.1.vk != *vk
+                    });
+                }
+            }
+            drop(g);
+            self.stop_macro(now);
+        } else if !(hk_keys.contains(&id) && !stop_keys.contains(&id)) {
+            m.events.push((now, ev.key.clone(), ev.down));
+            drop(g);
+            self.repaint();
+        }
+        true
     }
 
     pub fn cancel_record(&self) {
@@ -244,6 +353,7 @@ impl Shared {
         }
         self.runner.stop();
         self.cancel_record();
+        self.cancel_macro();
         {
             let mut s = self.settings.lock().unwrap();
             let Some(p) = s.profiles.get(i).cloned() else { return };
@@ -312,6 +422,13 @@ impl Shared {
 
     // ---------------------------------------------------------------- évènements clavier
     pub fn handle(&self, ev: RawKey) {
+        self.handle_at(ev, Instant::now());
+    }
+
+    fn handle_at(&self, ev: RawKey, now: Instant) {
+        if self.handle_macro(&ev, now) {
+            return;
+        }
         let id = ev.key.vk;
         // 1) enregistrement en cours ?
         {
@@ -409,7 +526,7 @@ pub fn spawn_poller(shared: Arc<Shared>) {
         let mut prev = [false; 256];
         let mut was_watched = [false; 256];
         loop {
-            let recording = shared.rec.lock().unwrap().is_some();
+            let recording = shared.rec.lock().unwrap().is_some() || shared.macro_active();
             let mut watch = [false; 256];
             if recording {
                 for (vk, w) in watch.iter_mut().enumerate().take(0xFF).skip(0x08) {
@@ -717,5 +834,63 @@ mod tests {
         sh.save_profile(None, "X".into());
         assert!(sh.settings.lock().unwrap().profiles.is_empty());
         assert_eq!(sh.flash.lock().unwrap().as_ref().map(|f| f.0), Some("prof_too_big"));
+    }
+
+    #[test]
+    fn macro_capture_ignores_hotkeys_and_stop_key() {
+        let (sh, _) = setup();
+        sh.settings.lock().unwrap().pattern.steps = config::example_steps();
+        sh.toggle_macro();
+        assert!(sh.macro_active());
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        // F6 (raccourci spam) et F7 (pattern) : ni déclenchés ni enregistrés
+        sh.handle_at(ev(0x75, true), at(0));
+        sh.handle_at(ev(0x75, false), at(30));
+        sh.handle_at(ev(0x76, true), at(40));
+        sh.handle_at(ev(0x76, false), at(60));
+        assert!(!sh.runner.running());
+        // Échap est enregistrée normalement, puis une touche quelconque
+        sh.handle_at(ev(0x1B, true), at(100));
+        sh.handle_at(ev(0x1B, false), at(150));
+        sh.handle_at(ev(0x41, true), at(600));
+        sh.handle_at(ev(0x41, false), at(1100));
+        assert_eq!(sh.macro_progress().unwrap().0, 4);
+        // F8 (arrêt) : termine la capture, absente de la macro
+        sh.handle_at(ev(0x77, true), at(1500));
+        assert!(!sh.macro_active());
+        assert!(!sh.runner.running());
+        let steps = sh.take_macro_out().unwrap();
+        assert_eq!(steps.len(), 3, "{steps:?}");
+        assert!(matches!(&steps[0], Step::Press { key, count: 1, .. } if key.vk == 0x1B));
+        assert!(matches!(&steps[1], Step::Wait { .. }));
+        assert!(matches!(&steps[2], Step::Hold { key, .. } if key.vk == 0x41));
+        sh.handle_at(ev(0x77, false), at(1520));
+        // après la capture, les raccourcis refonctionnent
+        sh.handle_at(ev(0x76, true), at(2000));
+        assert!(sh.is_running(Mode::Pattern));
+    }
+
+    #[test]
+    fn macro_capture_empty_and_busy() {
+        let (sh, _) = setup();
+        sh.toggle_macro();
+        sh.handle(ev(0x77, true)); // arrêt immédiat : rien enregistré
+        assert!(!sh.macro_active());
+        assert!(sh.take_macro_out().is_none());
+        assert_eq!(sh.flash.lock().unwrap().as_ref().map(|f| f.0), Some("macro_empty"));
+        sh.handle(ev(0x77, false));
+        // tâche en cours : démarrage refusé
+        sh.start(Mode::Spam);
+        sh.toggle_macro();
+        assert!(!sh.macro_active());
+        assert_eq!(sh.flash.lock().unwrap().as_ref().map(|f| f.0), Some("macro_busy"));
+        sh.runner.stop();
+        // re-clic = arrêt par bouton
+        sh.toggle_macro();
+        sh.handle_at(ev(0x41, true), Instant::now());
+        sh.toggle_macro();
+        assert!(!sh.macro_active());
+        assert_eq!(sh.take_macro_out().unwrap().len(), 1);
     }
 }

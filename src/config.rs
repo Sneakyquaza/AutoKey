@@ -222,7 +222,7 @@ fn config_path() -> PathBuf {
 }
 
 const MAX_FILE: u64 = 1024 * 1024;
-const MAX_STEPS: usize = 500;
+pub const MAX_STEPS: usize = 500;
 /// Intervalle minimum du spam (10 ms)
 pub const MIN_INTERVAL_S: f64 = 0.010;
 

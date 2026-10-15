@@ -4,6 +4,7 @@ mod control;
 mod engine;
 mod i18n;
 mod keys;
+mod macro_rec;
 mod platform;
 mod render;
 #[cfg(feature = "shots")]

@@ -12,7 +12,7 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 14] = [
+const SCENES: [&str; 15] = [
     "spam_fr",
     "spam_rec_en",
     "pattern_empty",
@@ -27,6 +27,7 @@ const SCENES: [&str; 14] = [
     "settings_pt",
     "profiles_pt",
     "profiles_en",
+    "macro_rec_pt",
 ];
 
 pub fn init(app: &mut App) {
@@ -45,6 +46,7 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
     let sh = app.shared();
     sh.runner.stop();
     sh.cancel_record();
+    sh.cancel_macro();
     let mut s = sh.settings.lock().unwrap();
     s.lang = Lang::Fr;
     s.profiles.clear();
@@ -103,6 +105,16 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
             s.lang = Lang::Pt;
             s.jitter_pct = 15.0;
             s.beep = true;
+        }
+        "macro_rec_pt" => {
+            s.mode = Mode::Pattern;
+            s.lang = Lang::Pt;
+            drop(s);
+            sh.toggle_macro();
+            for (vk, d) in [(0x5A, true), (0x5A, false), (0x45, true), (0x45, false)] {
+                sh.handle(crate::keys::RawKey { key: crate::keys::KeySpec::vk(vk), down: d });
+            }
+            s = sh.settings.lock().unwrap();
         }
         "pattern_pt" => {
             s.mode = Mode::Pattern;

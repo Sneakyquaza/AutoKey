@@ -90,6 +90,7 @@ pub(super) enum Ic {
     Loop,
     Keyboard,
     Edit,
+    Rec,
 }
 
 pub(super) fn icon(p: &Painter, ic: Ic, c: Pos2, size: f32, color: Color32) {
@@ -128,6 +129,10 @@ pub(super) fn icon(p: &Painter, ic: Ic, c: Pos2, size: f32, color: Color32) {
             line(pt(0.24, 0.3), pt(0.76, 0.3));
             poly(vec![pt(0.41, 0.3), pt(0.43, 0.2), pt(0.57, 0.2), pt(0.59, 0.3)]);
             poly(vec![pt(0.32, 0.3), pt(0.36, 0.8), pt(0.64, 0.8), pt(0.68, 0.3)]);
+        }
+        Ic::Rec => {
+            p.circle_stroke(c, s * 0.34, st);
+            p.circle_filled(c, s * 0.17, color);
         }
         Ic::Globe => {
             p.circle_stroke(c, s * 0.3, st);
