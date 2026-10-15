@@ -111,6 +111,24 @@ static T: &[(&str, [&str; 3])] = &[
     ("minimize", ["Réduire", "Minimize", "Minimizar"]),
     ("close", ["Fermer", "Close", "Fechar"]),
     ("settings", ["Réglages", "Settings", "Configurações"]),
+    ("compact", ["Vue réduite", "Compact view", "Vista reduzida"]),
+    ("compact_back", ["Vue complète", "Full view", "Vista completa"]),
+    ("tray", ["Zone de notification", "Tray icon", "Ícone na bandeja"]),
+    (
+        "tray_tip",
+        [
+            "Fermer / réduire cache la fenêtre dans la zone de notification",
+            "Close / minimize hides the window in the notification area",
+            "Fechar / minimizar oculta a janela na área de notificação",
+        ],
+    ),
+    ("tray_show", ["Afficher", "Show", "Mostrar"]),
+    ("tray_start_spam", ["Démarrer le spam", "Start spam", "Iniciar spam"]),
+    ("tray_stop_spam", ["Arrêter le spam", "Stop spam", "Parar spam"]),
+    ("tray_start_pat", ["Démarrer le pattern", "Start pattern", "Iniciar padrão"]),
+    ("tray_stop_pat", ["Arrêter le pattern", "Stop pattern", "Parar padrão"]),
+    ("tray_quit", ["Quitter", "Quit", "Sair"]),
+    ("tray_running", ["En cours", "Running", "Em execução"]),
     ("jitter", ["Aléa sur les délais", "Random delay variation", "Variação aleatória"]),
     ("bind_win", ["Lier à la fenêtre cible", "Bind to target window", "Vincular à janela alvo"]),
     ("paused", ["En pause — fenêtre cible inactive", "Paused — target window inactive", "Em pausa — janela alvo inativa"]),
@@ -288,6 +306,7 @@ mod tests {
             ("ui/pattern.rs", include_str!("ui/pattern.rs")),
             ("ui/widgets.rs", include_str!("ui/widgets.rs")),
             ("keys.rs", include_str!("keys.rs")),
+            ("platform.rs", include_str!("platform.rs")),
         ];
         let mut total = 0;
         for (name, src) in files {

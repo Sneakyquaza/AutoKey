@@ -2,7 +2,7 @@
 use crate::config::{self, Mode};
 use crate::control::Target;
 use crate::i18n::Lang;
-use crate::ui::{height_for, App, WIDTH};
+use crate::ui::{height_for, width_for, App};
 use egui::{self, vec2, ViewportCommand};
 
 pub struct Shots {
@@ -12,7 +12,7 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 16] = [
+const SCENES: [&str; 18] = [
     "spam_fr",
     "spam_rec_en",
     "pattern_empty",
@@ -29,6 +29,8 @@ const SCENES: [&str; 16] = [
     "profiles_pt",
     "profiles_en",
     "macro_rec_pt",
+    "compact_spam_pt",
+    "compact_pattern_en",
 ];
 
 pub fn init(app: &mut App) {
@@ -50,6 +52,7 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
     sh.cancel_macro();
     let mut s = sh.settings.lock().unwrap();
     s.lang = Lang::Fr;
+    s.compact = false;
     s.profiles.clear();
     s.active_profile = None;
     match name {
@@ -126,6 +129,22 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
             }
             s = sh.settings.lock().unwrap();
         }
+        "compact_spam_pt" => {
+            s.mode = Mode::Spam;
+            s.lang = Lang::Pt;
+            s.compact = true;
+        }
+        "compact_pattern_en" => {
+            s.mode = Mode::Pattern;
+            s.lang = Lang::En;
+            s.compact = true;
+            s.pattern.steps = config::example_steps();
+            s.pattern.loops = 3;
+            drop(s);
+            sh.start(Mode::Pattern);
+            std::thread::sleep(std::time::Duration::from_millis(3200));
+            s = sh.settings.lock().unwrap();
+        }
         "pattern_pt" => {
             s.mode = Mode::Pattern;
             s.lang = Lang::Pt;
@@ -134,9 +153,9 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
             s.mode = Mode::Pattern;
         }
     }
-    let m = s.mode;
+    let (m, c) = (s.mode, s.compact);
     drop(s);
-    ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(WIDTH, height_for(m))));
+    ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(width_for(c), height_for(m, c))));
 }
 
 pub fn tick(app: &mut App, ctx: &egui::Context) {

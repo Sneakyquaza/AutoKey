@@ -162,6 +162,10 @@ pub struct Settings {
     pub profiles: Vec<Profile>,
     /// Index du profil actif dans `profiles`
     pub active_profile: Option<usize>,
+    /// Icône dans la zone de notification (fermer = cacher la fenêtre, Windows)
+    pub tray: bool,
+    /// Vue réduite (mode, touche, démarrer/arrêter, état)
+    pub compact: bool,
 }
 
 /// Configuration nommée : seuls la touche/cadence du spam et le pattern sont rechargés,
@@ -199,6 +203,8 @@ impl Default for Settings {
             bind_window: false,
             profiles: vec![],
             active_profile: None,
+            tray: false,
+            compact: false,
         }
     }
 }
@@ -516,6 +522,18 @@ mod tests {
         assert_eq!((s.jitter_pct, s.beep, s.spam.limit), (12.5, true, SpamLimit::Count(42)));
         std::fs::write(t.file(), r#"{"bind_window":true}"#).unwrap();
         assert!(load_from(&t.file()).bind_window);
+    }
+
+    #[test]
+    fn tray_and_compact_defaults_and_compat() {
+        let t = Tmp::new();
+        std::fs::write(t.file(), r#"{"pin":true}"#).unwrap();
+        let s = load_from(&t.file());
+        assert!(!s.tray && !s.compact);
+        std::fs::write(t.file(), r#"{"tray":true,"compact":true}"#).unwrap();
+        let s = load_from(&t.file());
+        assert!(s.tray && s.compact);
+        assert!(!Settings::default().tray && !Settings::default().compact);
     }
 
     #[test]

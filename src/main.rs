@@ -27,6 +27,8 @@ const MIN_FRAME: Duration = Duration::from_millis(33);
 
 enum UserEvent {
     Repaint(Duration),
+    /// Commande de l'icône de la zone de notification
+    Tray(platform::TrayCmd),
 }
 
 fn sched(next: &mut Option<Instant>, delay: Duration) {
@@ -54,6 +56,7 @@ struct Runner {
     full_present: bool,
     proxy: EventLoopProxy<UserEvent>,
     pin: bool,
+    width: f32,
     height: f32,
 }
 
@@ -161,7 +164,7 @@ impl ApplicationHandler<UserEvent> for Runner {
         let icon = Icon::from_rgba(include_bytes!("../assets/icon64.rgba").to_vec(), 64, 64).ok();
         let mut attrs = Window::default_attributes()
             .with_title("AutoKey")
-            .with_inner_size(LogicalSize::new(ui::WIDTH as f64, self.height as f64))
+            .with_inner_size(LogicalSize::new(self.width as f64, self.height as f64))
             .with_decorations(false)
             .with_resizable(false)
             .with_visible(false)
@@ -171,7 +174,7 @@ impl ApplicationHandler<UserEvent> for Runner {
             let s = m.scale_factor();
             let ms = m.size();
             let mp = m.position();
-            let (ww, wh) = (ui::WIDTH as f64 * s, self.height as f64 * s);
+            let (ww, wh) = (self.width as f64 * s, self.height as f64 * s);
             attrs = attrs.with_position(PhysicalPosition::new(
                 mp.x + ((ms.width as f64 - ww) / 2.0).max(0.0) as i32,
                 mp.y + ((ms.height as f64 - wh) / 2.0).max(0.0) as i32,
@@ -195,6 +198,11 @@ impl ApplicationHandler<UserEvent> for Runner {
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(g) = self.gfx.as_mut() else { return };
         match &event {
+            WindowEvent::CloseRequested if self.app.tray_enabled() => {
+                // icône de notification active : on cache la fenêtre, la tâche continue (Quitter : menu de l'icône)
+                g.window.set_visible(false);
+                return;
+            }
             WindowEvent::CloseRequested => {
                 self.app.on_exit();
                 el.exit();
@@ -219,9 +227,31 @@ impl ApplicationHandler<UserEvent> for Runner {
         }
     }
 
-    fn user_event(&mut self, _el: &ActiveEventLoop, ev: UserEvent) {
-        let UserEvent::Repaint(d) = ev;
-        self.schedule(d);
+    fn user_event(&mut self, el: &ActiveEventLoop, ev: UserEvent) {
+        match ev {
+            UserEvent::Repaint(d) => self.schedule(d),
+            UserEvent::Tray(cmd) => {
+                match cmd {
+                    platform::TrayCmd::Show => {
+                        if let Some(g) = self.gfx.as_ref() {
+                            g.window.set_visible(true);
+                            g.window.set_minimized(false);
+                            g.window.focus_window();
+                        }
+                        self.full_present = true;
+                    }
+                    platform::TrayCmd::ToggleSpam => self.app.tray_toggle(config::Mode::Spam),
+                    platform::TrayCmd::TogglePattern => self.app.tray_toggle(config::Mode::Pattern),
+                    // même chemin de sortie que la fermeture : touches relâchées, config sauvegardée, icône retirée
+                    platform::TrayCmd::Quit => {
+                        self.app.on_exit();
+                        el.exit();
+                        return;
+                    }
+                }
+                self.schedule(Duration::ZERO);
+            }
+        }
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
@@ -259,7 +289,7 @@ fn main() {
         prev_hook(info);
     }));
     let settings = config::load();
-    let (mode, pin) = (settings.mode, settings.pin);
+    let (mode, pin, compact) = (settings.mode, settings.pin, settings.compact);
 
     let shared = control::Shared::new(settings, platform::keyboard());
     platform::start_test_input();
@@ -276,6 +306,12 @@ fn main() {
         ctx.set_request_repaint_callback(move |info| {
             let _ = p.send_event(UserEvent::Repaint(info.delay));
         });
+    }
+    {
+        let p = proxy.clone();
+        platform::tray_init(Box::new(move |c| {
+            let _ = p.send_event(UserEvent::Tray(c));
+        }));
     }
     shared.set_ctx(ctx.clone());
     #[allow(unused_mut)]
@@ -296,7 +332,8 @@ fn main() {
         full_present: true,
         proxy,
         pin,
-        height: ui::height_for(mode),
+        width: ui::width_for(compact),
+        height: ui::height_for(mode, compact),
     };
     let _ = &runner.proxy;
     let _ = event_loop.run_app(&mut runner);

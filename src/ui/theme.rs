@@ -23,7 +23,23 @@ pub(super) const ORANGE: Color32 = rgb(0xFB923C);
 pub(super) const GREEN: Color32 = rgb(0x34D399);
 
 pub const WIDTH: f32 = 1120.0;
-pub fn height_for(m: Mode) -> f32 {
+/// Largeur de la vue réduite
+pub const COMPACT_WIDTH: f32 = 420.0;
+/// Hauteur de la vue réduite : barre 60 + carte démarrer + pied 40
+pub const COMPACT_HEIGHT: f32 = 300.0;
+
+pub fn width_for(compact: bool) -> f32 {
+    if compact {
+        COMPACT_WIDTH
+    } else {
+        WIDTH
+    }
+}
+
+pub fn height_for(m: Mode, compact: bool) -> f32 {
+    if compact {
+        return COMPACT_HEIGHT;
+    }
     match m {
         Mode::Spam => 470.0,
         Mode::Pattern => 530.0,

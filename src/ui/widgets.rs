@@ -72,6 +72,8 @@ pub(super) enum Ic {
     Close,
     Min,
     Pin,
+    Shrink,
+    Expand,
     Left,
     Right,
     Copy,
@@ -118,6 +120,18 @@ pub(super) fn icon(p: &Painter, ic: Ic, c: Pos2, size: f32, color: Color32) {
             p.circle_stroke(pt(0.5, 0.36), s * 0.15, st);
             line(pt(0.5, 0.52), pt(0.5, 0.84));
             line(pt(0.3, 0.52), pt(0.7, 0.52));
+        }
+        Ic::Shrink => {
+            poly(vec![pt(0.58, 0.26), pt(0.58, 0.42), pt(0.74, 0.42)]);
+            line(pt(0.58, 0.42), pt(0.8, 0.2));
+            poly(vec![pt(0.42, 0.74), pt(0.42, 0.58), pt(0.26, 0.58)]);
+            line(pt(0.42, 0.58), pt(0.2, 0.8));
+        }
+        Ic::Expand => {
+            poly(vec![pt(0.6, 0.22), pt(0.78, 0.22), pt(0.78, 0.4)]);
+            line(pt(0.78, 0.22), pt(0.56, 0.44));
+            poly(vec![pt(0.4, 0.78), pt(0.22, 0.78), pt(0.22, 0.6)]);
+            line(pt(0.22, 0.78), pt(0.44, 0.56));
         }
         Ic::Left => poly(vec![pt(0.6, 0.28), pt(0.38, 0.5), pt(0.6, 0.72)]),
         Ic::Right => poly(vec![pt(0.4, 0.28), pt(0.62, 0.5), pt(0.4, 0.72)]),

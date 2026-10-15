@@ -32,6 +32,8 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_Diagnostics_Debug",
   "Win32_Graphics_Dwm",
   "Win32_Security",
+  "Win32_UI_Shell",
+  "Win32_Graphics_Gdi",
 ] }
 # boîtes de dialogue Ouvrir / Enregistrer natives
 rfd = { version = "0.15", default-features = false }

@@ -17,7 +17,7 @@ mod spam;
 mod theme;
 mod widgets;
 use theme::*;
-pub use theme::{height_for, setup_fonts, BG, WIDTH};
+pub use theme::{height_for, setup_fonts, width_for, BG};
 use widgets::*;
 
 // ------------------------------------------------------------------ application
@@ -25,7 +25,8 @@ enum Act {
     Record(Target),
     MacroToggle,
     Toggle(Mode),
-    SetMode(Mode),
+    /// Nouvelle taille de fenêtre (mode ou vue réduite changés)
+    Resize(Mode, bool),
     SetLang,
     Pin(bool),
     Minimize,
@@ -127,11 +128,14 @@ impl App {
                 self.sh.toggle_macro();
             }
             Act::Toggle(m) => self.sh.toggle(m),
-            Act::SetMode(m) => {
-                ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(WIDTH, height_for(m))));
+            Act::Resize(m, compact) => {
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(width_for(compact), height_for(m, compact))));
             }
             Act::SetLang => {}
             Act::Pin(on) => ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if on { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal })),
+            // avec l'icône de notification, réduire / fermer cache la fenêtre (la tâche continue)
+            Act::Minimize if self.tray_enabled() => ctx.send_viewport_cmd(ViewportCommand::Visible(false)),
+            Act::Close if self.tray_enabled() => ctx.send_viewport_cmd(ViewportCommand::Visible(false)),
             Act::Minimize => ctx.send_viewport_cmd(ViewportCommand::Minimized(true)),
             Act::Close => ctx.send_viewport_cmd(ViewportCommand::Close),
             Act::StepsChanged => {
@@ -189,6 +193,17 @@ impl App {
         self.up.quit.load(SeqCst)
     }
 
+    /// Icône de notification active : fermer cache la fenêtre au lieu de quitter
+    pub fn tray_enabled(&self) -> bool {
+        // seulement si l'icône est réellement affichée, sinon la fenêtre deviendrait inaccessible
+        self.sh.settings.lock().unwrap().tray && crate::platform::tray_active()
+    }
+
+    /// Commande du menu de l'icône de notification
+    pub fn tray_toggle(&self, m: Mode) {
+        self.sh.toggle(m);
+    }
+
     pub fn update(&mut self, ctx: &egui::Context) {
         self.frames += 1;
         let rec = self.sh.recording();
@@ -211,6 +226,7 @@ impl App {
             ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))));
         }
         let orig = self.sh.settings.lock().unwrap().clone();
+        crate::platform::tray_sync(orig.tray, orig.lang, self.sh.is_running(Mode::Spam), self.sh.is_running(Mode::Pattern));
         let mut s = orig.clone();
         let mut acts = vec![];
         egui::CentralPanel::default().frame(egui::Frame::none().fill(BG)).show(ctx, |ui| {
@@ -260,10 +276,15 @@ impl App {
         let foot = Rect::from_min_max(pos2(full.min.x, full.max.y - 40.0), full.max);
         let content = Rect::from_min_max(pos2(full.min.x, bar.max.y), pos2(full.max.x, foot.min.y));
 
-        self.titlebar(ui, bar, s, acts);
-        match s.mode {
-            Mode::Spam => self.spam_page(ui, content, s, rec, acts),
-            Mode::Pattern => self.pattern_page(ui, content, s, rec, acts),
+        if s.compact {
+            self.titlebar_compact(ui, bar, s, acts);
+            self.compact_page(ui, content, s, rec, acts);
+        } else {
+            self.titlebar(ui, bar, s, acts);
+            match s.mode {
+                Mode::Spam => self.spam_page(ui, content, s, rec, acts),
+                Mode::Pattern => self.pattern_page(ui, content, s, rec, acts),
+            }
         }
         self.footer(ui, foot, s);
         ui.painter().rect_stroke(full.shrink(0.5), 0.0, sk(1.0, LINE));

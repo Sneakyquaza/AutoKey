@@ -12,14 +12,21 @@ impl App {
         let p = ui.painter().clone();
         logo(&p, Rect::from_min_size(bar.min + vec2(20.0, 16.0), vec2(28.0, 28.0)));
         let r = text(&p, pos2(bar.min.x + 60.0, bar.center().y), Align2::LEFT_CENTER, "AutoKey", 15.0, W::B, TEXT);
-        text(&p, pos2(r.max.x + 8.0, bar.center().y + 1.0), Align2::LEFT_CENTER, concat!("v", env!("CARGO_PKG_VERSION")), 11.0, W::R, MUTED);
+        let vr = text(&p, pos2(r.max.x + 8.0, bar.center().y + 1.0), Align2::LEFT_CENTER, concat!("v", env!("CARGO_PKG_VERSION")), 11.0, W::R, MUTED);
+        // vue réduite (à gauche : la zone de droite est déjà pleine quand le bouton de mise à jour est visible)
+        let cr = Rect::from_min_size(pos2(vr.max.x + 14.0, bar.center().y - 17.0), vec2(34.0, 34.0));
+        if icon_btn(ui, cr, "compactbtn", Ic::Shrink, tr(lang, "compact"), false, false).clicked() {
+            s.compact = true;
+            self.close_popups();
+            acts.push(Act::Resize(s.mode, true));
+        }
 
         // onglets
         let tabs = Rect::from_center_size(bar.center(), vec2(236.0, 40.0));
         let mut mode = s.mode;
         if segmented(ui, tabs, Id::new("tabs"), &[(Mode::Spam, tr(lang, "spam").into()), (Mode::Pattern, tr(lang, "pattern").into())], &mut mode, 13.0, true) {
             s.mode = mode;
-            acts.push(Act::SetMode(mode));
+            acts.push(Act::Resize(mode, false));
         }
 
         // boutons droite
@@ -99,6 +106,75 @@ impl App {
         }
     }
 
+    fn close_popups(&mut self) {
+        self.lang_open = false;
+        self.settings_open = false;
+        self.profiles_open = false;
+        self.prof_rename = None;
+    }
+
+    /// Barre de titre de la vue réduite : logo, retour à la vue complète, épingle, réduire, fermer
+    pub(super) fn titlebar_compact(&mut self, ui: &mut Ui, bar: Rect, s: &mut Settings, acts: &mut Vec<Act>) {
+        let lang = s.lang;
+        let drag = ui.interact(bar, Id::new("drag"), Sense::click_and_drag());
+        if drag.drag_started() {
+            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        }
+        let p = ui.painter().clone();
+        logo(&p, Rect::from_min_size(bar.min + vec2(16.0, 16.0), vec2(28.0, 28.0)));
+        text(&p, pos2(bar.min.x + 54.0, bar.center().y), Align2::LEFT_CENTER, "AutoKey", 15.0, W::B, TEXT);
+        let mut x = bar.max.x - 12.0 - 34.0;
+        let y = bar.center().y - 17.0;
+        let br = |x: f32| Rect::from_min_size(pos2(x, y), vec2(34.0, 34.0));
+        if icon_btn(ui, br(x), "close", Ic::Close, tr(lang, "close"), false, true).clicked() {
+            acts.push(Act::Close);
+        }
+        x -= 38.0;
+        if icon_btn(ui, br(x), "min", Ic::Min, tr(lang, "minimize"), false, false).clicked() {
+            acts.push(Act::Minimize);
+        }
+        x -= 38.0;
+        if icon_btn(ui, br(x), "pin", Ic::Pin, tr(lang, "pin"), s.pin, false).clicked() {
+            s.pin = !s.pin;
+            acts.push(Act::Pin(s.pin));
+        }
+        x -= 38.0;
+        if icon_btn(ui, br(x), "compactbtn", Ic::Expand, tr(lang, "compact_back"), false, false).clicked() {
+            s.compact = false;
+            acts.push(Act::Resize(s.mode, false));
+        }
+    }
+
+    /// Vue réduite : mode, raccourci, démarrer / arrêter (l'état est dans le pied de page)
+    pub(super) fn compact_page(&mut self, ui: &mut Ui, c: Rect, s: &mut Settings, rec: &Option<Recording>, acts: &mut Vec<Act>) {
+        let lang = s.lang;
+        let inner = Rect::from_min_max(c.min + vec2(20.0, 10.0), c.max - vec2(20.0, 14.0));
+        let tabs = Rect::from_min_size(inner.min, vec2(inner.width(), 36.0));
+        let mut mode = s.mode;
+        if segmented(ui, tabs, Id::new("ctabs"), &[(Mode::Spam, tr(lang, "spam").into()), (Mode::Pattern, tr(lang, "pattern").into())], &mut mode, 13.0, true) {
+            s.mode = mode;
+        }
+        let top = tabs.max.y + 12.0;
+        let h = inner.max.y - top;
+        let kw = 170.0;
+        let key_r = Rect::from_min_size(pos2(inner.min.x, top), vec2(kw, h));
+        let st_r = Rect::from_min_max(pos2(key_r.max.x + 14.0, top), inner.max);
+        let p = ui.painter().clone();
+        card(&p, key_r);
+        card_title(&p, key_r, tr(lang, "hotkey"));
+        let t = if s.mode == Mode::Spam { Target::SpamHotkey } else { Target::PatHotkey };
+        let cur = if s.mode == Mode::Spam { combo_label(&s.spam.hotkey, lang) } else { combo_label(&s.pattern.hotkey, lang) };
+        let (lbl, recording) = Self::rec_label(s, rec, t, cur);
+        let cap = Rect::from_min_max(key_r.min + vec2(14.0, 44.0), key_r.max - vec2(14.0, 16.0));
+        if keycap(ui, cap, Id::new("chk").with(s.mode as u8), &lbl, recording, CapSize::Mid, lang, true).on_hover_text(tr(lang, "click_change")).clicked() {
+            acts.push(Act::Record(t));
+        }
+        let hint = Self::hotkey_hint(s, s.mode, rec);
+        if start_button(ui, st_r, Id::new("start_compact"), self.sh.is_running(s.mode), &hint, lang, false) {
+            acts.push(Act::Toggle(s.mode));
+        }
+    }
+
     pub(super) fn lang_popup(&mut self, ui: &mut Ui, full: Rect, s: &mut Settings, acts: &mut Vec<Act>) {
         let btn_right = full.max.x - 12.0 - 34.0 - 38.0 - 38.0 - 38.0 - 10.0;
         let r = Rect::from_min_size(pos2(btn_right - 160.0, full.min.y + 52.0), vec2(160.0, 3.0 * 34.0 + 12.0));
@@ -135,7 +211,7 @@ impl App {
     pub(super) fn settings_popup(&mut self, ui: &mut Ui, full: Rect, s: &mut Settings, rec: &Option<Recording>, acts: &mut Vec<Act>) {
         let lang = s.lang;
         let gear_right = full.max.x - 12.0 - 34.0 - 38.0 - 38.0;
-        let r = Rect::from_min_size(pos2(gear_right - 300.0, full.min.y + 52.0), vec2(300.0, 5.0 * 50.0 + 12.0));
+        let r = Rect::from_min_size(pos2(gear_right - 300.0, full.min.y + 52.0), vec2(300.0, 6.0 * 50.0 + 12.0));
         let p = ui.painter().clone();
         p.rect_filled(r.translate(vec2(0.0, 6.0)).expand(2.0), 14.0, Color32::from_black_alpha(90));
         p.rect(r, 12.0, SURFACE, sk(1.0, LINE2));
@@ -164,10 +240,17 @@ impl App {
         let wr = Rect::from_center_size(pos2(r.max.x - 16.0 - 45.0, row(3.0)), vec2(90.0, 36.0));
         segmented(ui, wr, Id::new("bindwin"), &[(false, tr(lang, "off").into()), (true, tr(lang, "on").into())], &mut s.bind_window, 13.0, false);
         inside |= ui.rect_contains_pointer(wr);
+        // icône zone de notification
+        text(&p, pos2(r.min.x + 16.0, row(4.0)), Align2::LEFT_CENTER, tr(lang, "tray"), 13.0, W::S, TEXT);
+        ui.interact(Rect::from_center_size(pos2(r.min.x + 100.0, row(4.0)), vec2(170.0, 36.0)), Id::new("traytip"), Sense::hover())
+            .on_hover_text(tr(lang, "tray_tip"));
+        let tr_r = Rect::from_center_size(pos2(r.max.x - 16.0 - 45.0, row(4.0)), vec2(90.0, 36.0));
+        segmented(ui, tr_r, Id::new("tray"), &[(false, tr(lang, "off").into()), (true, tr(lang, "on").into())], &mut s.tray, 13.0, false);
+        inside |= ui.rect_contains_pointer(tr_r);
         // arrêt d'urgence
-        text(&p, pos2(r.min.x + 16.0, row(4.0)), Align2::LEFT_CENTER, tr(lang, "stop_hk"), 13.0, W::S, TEXT);
+        text(&p, pos2(r.min.x + 16.0, row(5.0)), Align2::LEFT_CENTER, tr(lang, "stop_hk"), 13.0, W::S, TEXT);
         let (lbl, recording) = Self::rec_label(s, rec, Target::StopHotkey, combo_label(&s.stop_hotkey, lang));
-        let cr = Rect::from_center_size(pos2(r.max.x - 16.0 - 60.0, row(4.0)), vec2(120.0, 36.0));
+        let cr = Rect::from_center_size(pos2(r.max.x - 16.0 - 60.0, row(5.0)), vec2(120.0, 36.0));
         let resp = keycap(ui, cr, Id::new("stophk"), &lbl, recording, CapSize::Mid, lang, true).on_hover_text(tr(lang, "click_change"));
         inside |= resp.hovered();
         if resp.clicked() {
@@ -416,6 +499,12 @@ impl App {
                 col = AMBER;
             }
             _ => {}
+        }
+        if s.compact {
+            // vue réduite : pas d'indication « arrière-plan », le message prend toute la largeur
+            let msg = fit_text(p, &msg, 12.0, W::S, r.width() - 40.0 - 12.0);
+            text(p, pos2(r.min.x + 40.0, r.center().y), Align2::LEFT_CENTER, &msg, 12.0, W::S, col);
+            return;
         }
         text(p, pos2(r.min.x + 40.0, r.center().y), Align2::LEFT_CENTER, &msg, 12.0, W::S, col);
         text(p, pos2(r.max.x - 20.0, r.center().y), Align2::RIGHT_CENTER, tr(lang, "bg_hint"), 12.0, W::R, MUTED);

@@ -126,7 +126,12 @@ mod win {
             }
             if GetLastError() == ERROR_ALREADY_EXISTS {
                 let r = WaitForSingleObject(h, 8000);
-                return r == WAIT_OBJECT_0 || r == WAIT_ABANDONED;
+                let ok = r == WAIT_OBJECT_0 || r == WAIT_ABANDONED;
+                if !ok {
+                    // la première instance tourne vraiment (peut-être cachée dans la zone de notification) : on la réaffiche
+                    tray::wake_existing();
+                }
+                return ok;
             }
         }
         true
@@ -152,6 +157,228 @@ mod win {
                 &pref as *const i32 as *const core::ffi::c_void,
                 std::mem::size_of::<i32>() as u32,
             );
+        }
+    }
+
+    /// Icône de la zone de notification : fenêtre cachée (de premier niveau, pas « message-only » :
+    /// ces dernières ne reçoivent pas le broadcast `TaskbarCreated`) dans un thread dédié.
+    pub mod tray {
+        use super::super::TrayCmd;
+        use crate::i18n::{tr, Lang};
+        use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU8, Ordering::SeqCst};
+        use std::sync::OnceLock;
+        use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows_sys::Win32::UI::Shell::{Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW,
+            GetSystemMetrics, LoadIconW, LoadImageW, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow,
+            TrackPopupMenu, TranslateMessage, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON,
+            TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
+        };
+
+        const WM_TRAY: u32 = WM_APP + 1;
+        const WM_SYNC: u32 = WM_APP + 2;
+        const WM_SHOW: u32 = WM_APP + 3;
+        const CLASS: &str = "AutoKeyTrayWnd";
+        /// Ressource d'icône embarquée par build.rs (`set_icon` → ID 1)
+        const ICON_ID: usize = 1;
+
+        static HWND_TRAY: AtomicIsize = AtomicIsize::new(0);
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        static ADDED: AtomicBool = AtomicBool::new(false);
+        static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+        static ON: AtomicBool = AtomicBool::new(false);
+        static LANG: AtomicU8 = AtomicU8::new(0);
+        static SPAM: AtomicBool = AtomicBool::new(false);
+        static PAT: AtomicBool = AtomicBool::new(false);
+        pub static SENDER: OnceLock<Box<dyn Fn(TrayCmd) + Send + Sync>> = OnceLock::new();
+
+        fn wide(s: &str) -> Vec<u16> {
+            s.encode_utf16().chain(std::iter::once(0)).collect()
+        }
+
+        fn lang() -> Lang {
+            Lang::ALL[(LANG.load(SeqCst) as usize).min(Lang::ALL.len() - 1)]
+        }
+
+        fn send(c: TrayCmd) {
+            if let Some(f) = SENDER.get() {
+                f(c);
+            }
+        }
+
+        /// État voulu (appelé à chaque image de l'UI) : ne réveille le thread que si quelque chose a changé
+        pub fn sync(on: bool, l: Lang, spam: bool, pat: bool) {
+            let changed = ON.swap(on, SeqCst) != on || LANG.swap(l as u8, SeqCst) != l as u8 || SPAM.swap(spam, SeqCst) != spam || PAT.swap(pat, SeqCst) != pat;
+            if !changed {
+                return;
+            }
+            if on && !STARTED.swap(true, SeqCst) {
+                std::thread::spawn(run);
+                return; // le thread lit l'état voulu à sa création
+            }
+            let h = HWND_TRAY.load(SeqCst);
+            if h != 0 {
+                unsafe { PostMessageW(h as HWND, WM_SYNC, 0, 0) };
+            }
+        }
+
+        fn nid(hwnd: HWND) -> NOTIFYICONDATAW {
+            let mut d: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
+            d.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+            d.hWnd = hwnd;
+            d.uID = 1;
+            d
+        }
+
+        fn load_icon() -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
+            unsafe {
+                let hinst = GetModuleHandleW(std::ptr::null());
+                let ic = LoadImageW(hinst, ICON_ID as *const u16, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+                if ic.is_null() {
+                    LoadIconW(std::ptr::null_mut(), IDI_APPLICATION)
+                } else {
+                    ic as _
+                }
+            }
+        }
+
+        /// Ajoute / met à jour / retire l'icône selon l'état voulu
+        unsafe fn apply(hwnd: HWND) {
+            let added = ADDED.load(SeqCst);
+            if !ON.load(SeqCst) {
+                if added {
+                    Shell_NotifyIconW(NIM_DELETE, &nid(hwnd));
+                    ADDED.store(false, SeqCst);
+                }
+                return;
+            }
+            let mut d = nid(hwnd);
+            d.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+            d.uCallbackMessage = WM_TRAY;
+            d.hIcon = load_icon();
+            let state = if SPAM.load(SeqCst) || PAT.load(SeqCst) { tr(lang(), "tray_running") } else { tr(lang(), "idle") };
+            for (i, c) in wide(&format!("AutoKey — {state}")).into_iter().take(d.szTip.len() - 1).enumerate() {
+                d.szTip[i] = c;
+            }
+            if Shell_NotifyIconW(if added { NIM_MODIFY } else { NIM_ADD }, &d) != 0 {
+                ADDED.store(true, SeqCst);
+            }
+        }
+
+        /// Retrait immédiat (sortie, panique) : n'utilise que des atomiques et une API Shell
+        pub fn active() -> bool {
+            ADDED.load(SeqCst)
+        }
+
+        pub fn remove() {
+            let h = HWND_TRAY.load(SeqCst);
+            if h != 0 && ADDED.swap(false, SeqCst) {
+                unsafe { Shell_NotifyIconW(NIM_DELETE, &nid(h as HWND)) };
+            }
+        }
+
+        const ID_SHOW: usize = 1;
+        const ID_SPAM: usize = 2;
+        const ID_PAT: usize = 3;
+        const ID_QUIT: usize = 4;
+
+        unsafe fn show_menu(hwnd: HWND) {
+            let l = lang();
+            let m = CreatePopupMenu();
+            if m.is_null() {
+                return;
+            }
+            let spam = if SPAM.load(SeqCst) { "tray_stop_spam" } else { "tray_start_spam" };
+            let pat = if PAT.load(SeqCst) { "tray_stop_pat" } else { "tray_start_pat" };
+            AppendMenuW(m, MF_STRING, ID_SHOW, wide(tr(l, "tray_show")).as_ptr());
+            AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
+            AppendMenuW(m, MF_STRING, ID_SPAM, wide(tr(l, spam)).as_ptr());
+            AppendMenuW(m, MF_STRING, ID_PAT, wide(tr(l, pat)).as_ptr());
+            AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
+            AppendMenuW(m, MF_STRING, ID_QUIT, wide(tr(l, "tray_quit")).as_ptr());
+            let mut pt = POINT { x: 0, y: 0 };
+            GetCursorPos(&mut pt);
+            // requis par Windows pour que le menu se ferme quand on clique ailleurs
+            SetForegroundWindow(hwnd);
+            let cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, std::ptr::null());
+            PostMessageW(hwnd, WM_NULL, 0, 0);
+            DestroyMenu(m);
+            match cmd as usize {
+                ID_SHOW => send(TrayCmd::Show),
+                ID_SPAM => send(TrayCmd::ToggleSpam),
+                ID_PAT => send(TrayCmd::TogglePattern),
+                ID_QUIT => send(TrayCmd::Quit),
+                _ => {}
+            }
+        }
+
+        unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+            match msg {
+                WM_TRAY => match (lp & 0xFFFF) as u32 {
+                    WM_LBUTTONUP => send(TrayCmd::Show),
+                    WM_RBUTTONUP => show_menu(hwnd),
+                    _ => {}
+                },
+                WM_SYNC => apply(hwnd),
+                WM_SHOW => send(TrayCmd::Show),
+                WM_DESTROY => {
+                    remove();
+                    PostQuitMessage(0);
+                }
+                m if m != 0 && m == TASKBAR_CREATED.load(SeqCst) => {
+                    // l'explorateur a redémarré : l'icône a disparu
+                    ADDED.store(false, SeqCst);
+                    apply(hwnd);
+                }
+                _ => return DefWindowProcW(hwnd, msg, wp, lp),
+            }
+            0
+        }
+
+        fn run() {
+            unsafe {
+                let hinst = GetModuleHandleW(std::ptr::null());
+                let class = wide(CLASS);
+                TASKBAR_CREATED.store(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()), SeqCst);
+                let wc = WNDCLASSW {
+                    style: 0,
+                    lpfnWndProc: Some(wndproc),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: hinst,
+                    hIcon: std::ptr::null_mut(),
+                    hCursor: std::ptr::null_mut(),
+                    hbrBackground: std::ptr::null_mut(),
+                    lpszMenuName: std::ptr::null(),
+                    lpszClassName: class.as_ptr(),
+                };
+                RegisterClassW(&wc);
+                let hwnd =
+                    CreateWindowExW(0, class.as_ptr(), class.as_ptr(), 0, 0, 0, 0, 0, std::ptr::null_mut(), std::ptr::null_mut(), hinst, std::ptr::null());
+                if hwnd.is_null() {
+                    STARTED.store(false, SeqCst);
+                    return;
+                }
+                HWND_TRAY.store(hwnd as isize, SeqCst);
+                apply(hwnd);
+                let mut msg: MSG = std::mem::zeroed();
+                while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        }
+
+        /// Demande à une autre instance (fenêtre cachée dans la zone de notification) de se réafficher
+        pub fn wake_existing() {
+            unsafe {
+                let h = FindWindowW(wide(CLASS).as_ptr(), std::ptr::null());
+                if !h.is_null() {
+                    PostMessageW(h, WM_SHOW, 0, 0);
+                }
+            }
         }
     }
 
@@ -259,6 +486,8 @@ impl Keyboard for NullKeyboard {
 
 /// Relâche toute touche que nous avons envoyée enfoncée (panique, sortie) : n'utilise que des atomiques.
 pub fn release_held() {
+    #[cfg(windows)]
+    win::tray::remove();
     for vk in 0..256u16 {
         if INJ[vk as usize].load(Relaxed) == HELD {
             #[cfg(windows)]
@@ -267,6 +496,36 @@ pub fn release_held() {
             NullKeyboard.up(&KeySpec::vk(vk));
         }
     }
+}
+
+/// Commande émise par l'icône de la zone de notification
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrayCmd {
+    Show,
+    ToggleSpam,
+    TogglePattern,
+    Quit,
+}
+
+/// Enregistre le récepteur des commandes de l'icône (appelé une fois au démarrage). No-op hors Windows.
+pub fn tray_init(_f: Box<dyn Fn(TrayCmd) + Send + Sync>) {
+    #[cfg(windows)]
+    let _ = win::tray::SENDER.set(_f);
+}
+
+/// État voulu de l'icône : présence, langue du menu, tâches en cours (info-bulle + libellés). No-op hors Windows.
+pub fn tray_sync(_on: bool, _lang: crate::i18n::Lang, _spam: bool, _pat: bool) {
+    #[cfg(windows)]
+    win::tray::sync(_on, _lang, _spam, _pat);
+}
+
+/// Vrai si l'icône est effectivement présente dans la zone de notification
+pub fn tray_active() -> bool {
+    #[cfg(windows)]
+    return win::tray::active();
+    #[cfg(not(windows))]
+    return false;
 }
 
 pub fn keyboard() -> Arc<dyn Keyboard> {
