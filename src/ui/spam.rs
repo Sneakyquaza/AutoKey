@@ -70,6 +70,36 @@ impl App {
             }
             cx += w + 6.0;
         }
+        // arrêt automatique
+        let ly = int_r.min.y + 192.0;
+        text(&p, pos2(int_r.min.x + 18.0, ly), Align2::LEFT_CENTER, tr(lang, "limit"), 12.0, W::R, MUTED);
+        let seg_r = Rect::from_min_size(pos2(int_r.min.x + 18.0, ly + 12.0), vec2(250.0, 36.0));
+        let mut kind = match s.spam.limit {
+            SpamLimit::None => 0u8,
+            SpamLimit::Count(_) => 1,
+            SpamLimit::Duration(_) => 2,
+        };
+        let items = [(0u8, tr(lang, "limit_none").to_string()), (1, tr(lang, "limit_count").to_string()), (2, tr(lang, "limit_dur").to_string())];
+        if segmented(ui, seg_r, Id::new("spamlimit"), &items, &mut kind, 13.0, false) {
+            s.spam.limit = match kind {
+                1 => SpamLimit::Count(100),
+                2 => SpamLimit::Duration(60.0),
+                _ => SpamLimit::None,
+            };
+        }
+        let nr = Rect::from_min_size(pos2(seg_r.max.x + 10.0, seg_r.min.y), vec2(110.0, 36.0));
+        match &mut s.spam.limit {
+            SpamLimit::None => {}
+            SpamLimit::Count(n) => {
+                let mut v = *n as f64;
+                num_field(ui, nr, Id::new("limitcount"), &mut v, 1.0, config::MAX_LIMIT_COUNT as f64, true, 16.0, true, lang);
+                *n = v as u64;
+            }
+            SpamLimit::Duration(d) => {
+                num_field(ui, nr, Id::new("limitdur"), d, config::MIN_LIMIT_S, config::MAX_LIMIT_S, false, 16.0, true, lang);
+                text(&p, pos2(nr.max.x + 8.0, nr.center().y), Align2::LEFT_CENTER, "s", 12.0, W::S, MUTED);
+            }
+        }
         let iv = config::secs(s.spam.value, s.spam.unit).max(config::MIN_INTERVAL_S);
         rhythm(&p, Rect::from_min_size(pos2(int_r.min.x + 18.0, int_r.max.y - 84.0), vec2(iw - 36.0, 46.0)), iv);
         let rate = if iv <= 1.0 {

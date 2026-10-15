@@ -1,4 +1,5 @@
 //! Moteur d'exécution : un thread par tâche, arrêt interruptible, aucune touche laissée enfoncée.
+use crate::config::SpamLimit;
 use crate::keys::KeySpec;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering::*};
 use std::sync::{Arc, Condvar, Mutex};
@@ -12,8 +13,19 @@ pub trait Keyboard: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub enum Job {
-    Spam { key: KeySpec, interval: f64, press: f64 },
-    Pattern { steps: Vec<CStep>, loops: u32 },
+    /// `jitter` : fraction 0..0.5 (0 = aucun aléa) ; `limit` : arrêt automatique
+    Spam {
+        key: KeySpec,
+        interval: f64,
+        press: f64,
+        jitter: f64,
+        limit: SpamLimit,
+    },
+    Pattern {
+        steps: Vec<CStep>,
+        loops: u32,
+        jitter: f64,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -32,6 +44,40 @@ pub struct Status {
     pub loops: AtomicU32,
     pub step: AtomicI32,
     pub steps_total: AtomicU32,
+    /// Instant de démarrage de la tâche en cours
+    pub started: Mutex<Option<Instant>>,
+}
+
+/// PRNG xorshift64 (aléa non cryptographique, suffisant pour le jitter)
+struct Rng(u64);
+
+impl Rng {
+    fn new() -> Self {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+        let addr = &t as *const u64 as u64;
+        // mélange (splitmix64) ; jamais 0 pour xorshift
+        let mut z = t ^ addr.rotate_left(32) ^ 0x9E37_79B9_7F4A_7C15;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        Rng((z ^ (z >> 31)) | 1)
+    }
+    /// Uniforme dans [0, 1)
+    fn next_f64(&mut self) -> f64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        (x >> 11) as f64 / (1u64 << 53) as f64
+    }
+    /// `v` multiplié par un facteur uniforme dans [1-p, 1+p] (p = 0 : inchangé)
+    fn jitter(&mut self, v: f64, p: f64) -> f64 {
+        if p > 0.0 {
+            v * (1.0 + p * (2.0 * self.next_f64() - 1.0))
+        } else {
+            v
+        }
+    }
 }
 
 struct Stop {
@@ -73,11 +119,13 @@ pub struct Runner {
     kb: Arc<dyn Keyboard>,
     cur: Mutex<Option<(Arc<Stop>, JoinHandle<()>)>>,
     pub status: Arc<Status>,
+    /// Bip au démarrage / à l'arrêt effectifs d'une tâche
+    pub beep: AtomicBool,
 }
 
 impl Runner {
     pub fn new(kb: Arc<dyn Keyboard>) -> Self {
-        Runner { kb, cur: Mutex::new(None), status: Arc::new(Status::default()) }
+        Runner { kb, cur: Mutex::new(None), status: Arc::new(Status::default()), beep: AtomicBool::new(false) }
     }
 
     pub fn running(&self) -> bool {
@@ -104,15 +152,23 @@ impl Runner {
         st.loop_i.store(0, SeqCst);
         st.step.store(-1, SeqCst);
         st.mode.store(matches!(job, Job::Pattern { .. }) as u8, SeqCst);
+        *st.started.lock().unwrap() = Some(Instant::now());
         st.running.store(true, SeqCst);
+        let beep = self.beep.load(SeqCst);
         let stop = Arc::new(Stop::new());
         let (kb, status, stop2) = (self.kb.clone(), self.status.clone(), stop.clone());
         let h = std::thread::spawn(move || {
             crate::platform::hires(true);
+            if beep {
+                crate::platform::beep(true);
+            }
             run_job(&*kb, &status, &stop2, job);
             crate::platform::hires(false);
             status.step.store(-1, SeqCst);
             status.running.store(false, SeqCst);
+            if beep {
+                crate::platform::beep(false);
+            }
         });
         *self.cur.lock().unwrap() = Some((stop, h));
     }
@@ -128,26 +184,42 @@ fn tap(kb: &dyn Keyboard, k: &KeySpec, st: &Status, stop: &Stop, press: f64) -> 
 }
 
 fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, job: Job) {
+    let mut rng = Rng::new();
     match job {
-        Job::Spam { key, interval, press } => {
-            let iv = Duration::from_secs_f64(interval.max(crate::config::MIN_INTERVAL_S));
-            let hold = press.max(0.0).min(iv.as_secs_f64() / 2.0);
+        Job::Spam { key, interval, press, jitter, limit } => {
+            let base = interval.max(crate::config::MIN_INTERVAL_S);
             let mut next = Instant::now();
+            let deadline = match limit {
+                SpamLimit::Duration(d) => Some(next + Duration::from_secs_f64(d.max(0.0))),
+                _ => None,
+            };
+            let mut taps = 0u64;
             loop {
+                if deadline.is_some_and(|d| Instant::now() >= d) {
+                    break;
+                }
+                let iv = rng.jitter(base, jitter).max(crate::config::MIN_INTERVAL_S);
+                let hold = press.max(0.0).min(iv / 2.0);
                 if !tap(kb, &key, st, stop, hold) {
                     break;
                 }
-                next += iv;
+                taps += 1;
+                if matches!(limit, SpamLimit::Count(n) if taps >= n) {
+                    break;
+                }
+                next += Duration::from_secs_f64(iv);
                 let now = Instant::now();
                 if next < now {
                     next = now; // pas de rattrapage en rafale
                 }
-                if !stop.wait_until(next) {
+                // attente plafonnée à la fin de la durée limite
+                let until = deadline.map_or(next, |d| next.min(d));
+                if !stop.wait_until(until) {
                     break;
                 }
             }
         }
-        Job::Pattern { steps, loops } => {
+        Job::Pattern { steps, loops, jitter } => {
             st.loops.store(loops, SeqCst);
             st.steps_total.store(steps.len() as u32, SeqCst);
             let mut i = 0u32;
@@ -166,14 +238,14 @@ fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, job: Job) {
                         CStep::Press(k, count, gap, press) => {
                             let mut ok = true;
                             for c in 0..*count {
-                                if !tap(kb, k, st, stop, *press) || (c + 1 < *count && !stop.wait(*gap)) {
+                                if !tap(kb, k, st, stop, *press) || (c + 1 < *count && !stop.wait(rng.jitter(*gap, jitter))) {
                                     ok = false;
                                     break;
                                 }
                             }
                             ok
                         }
-                        CStep::Wait(sec) => stop.wait(*sec),
+                        CStep::Wait(sec) => stop.wait(rng.jitter(*sec, jitter)),
                     };
                     if !ok || stop.is_set() {
                         break 'outer;
@@ -207,7 +279,7 @@ pub mod tests {
     fn spam_rate_and_stop() {
         let log = Arc::new(Log::default());
         let r = Runner::new(log.clone());
-        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 0.05, press: 0.0 });
+        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 0.05, press: 0.0, jitter: 0.0, limit: SpamLimit::None });
         sleep(525);
         r.stop();
         let n = log.0.lock().unwrap().iter().filter(|e| e.0).count();
@@ -220,7 +292,7 @@ pub mod tests {
         let log = Arc::new(Log::default());
         let r = Runner::new(log.clone());
         let steps = vec![CStep::Hold(KeySpec::letter('z'), 0.02), CStep::Wait(0.01), CStep::Press(KeySpec::letter('e'), 3, 0.005, 0.0)];
-        r.start(Job::Pattern { steps, loops: 2 });
+        r.start(Job::Pattern { steps, loops: 2, jitter: 0.0 });
         sleep(800);
         assert!(!r.running());
         let l = log.0.lock().unwrap();
@@ -232,7 +304,7 @@ pub mod tests {
     fn stop_during_hold_releases() {
         let log = Arc::new(Log::default());
         let r = Runner::new(log.clone());
-        r.start(Job::Pattern { steps: vec![CStep::Hold(KeySpec::letter('z'), 5.0)], loops: 0 });
+        r.start(Job::Pattern { steps: vec![CStep::Hold(KeySpec::letter('z'), 5.0)], loops: 0, jitter: 0.0 });
         sleep(50);
         let t = Instant::now();
         r.stop();
@@ -244,7 +316,7 @@ pub mod tests {
     fn stop_during_long_press_releases() {
         let log = Arc::new(Log::default());
         let r = Runner::new(log.clone());
-        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 20.0, press: 5.0 });
+        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 20.0, press: 5.0, jitter: 0.0, limit: SpamLimit::None });
         sleep(50);
         let t = Instant::now();
         r.stop();
@@ -253,7 +325,7 @@ pub mod tests {
 
         let r = Runner::new(log.clone());
         log.0.lock().unwrap().clear();
-        r.start(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 3, 0.01, 5.0)], loops: 0 });
+        r.start(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 3, 0.01, 5.0)], loops: 0, jitter: 0.0 });
         sleep(50);
         r.stop();
         assert_eq!(*log.0.lock().unwrap(), vec![(true, 0x45), (false, 0x45)]);
@@ -274,7 +346,7 @@ pub mod tests {
         }
         let ts = Arc::new(Ts::default());
         let r = Runner::new(ts.clone());
-        r.start(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 3, 0.03, 0.04)], loops: 1 });
+        r.start(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 3, 0.03, 0.04)], loops: 1, jitter: 0.0 });
         sleep(400);
         assert!(!r.running());
         let l = ts.0.lock().unwrap();
@@ -296,10 +368,51 @@ pub mod tests {
         let log = Arc::new(Log::default());
         let r = Runner::new(log.clone());
         // press 1 s demandé, plafonné à 25 ms : l'arrêt reste rapide et la cadence tient
-        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 0.05, press: 1.0 });
+        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 0.05, press: 1.0, jitter: 0.0, limit: SpamLimit::None });
         sleep(525);
         r.stop();
         let n = log.0.lock().unwrap().iter().filter(|e| e.0).count();
         assert!((8..=12).contains(&n), "presses = {n}");
+    }
+
+    #[test]
+    fn jitter_bounded() {
+        let mut r = Rng::new();
+        let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+        for _ in 0..5000 {
+            let v = r.jitter(1.0, 0.3);
+            assert!((0.7..=1.3).contains(&v), "v = {v}");
+            lo = lo.min(v);
+            hi = hi.max(v);
+        }
+        assert!(lo < 0.8 && hi > 1.2, "pas d'aléa : {lo}..{hi}");
+        assert_eq!(r.jitter(2.0, 0.0), 2.0);
+    }
+
+    #[test]
+    fn spam_limit_count() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 0.02, press: 0.0, jitter: 0.5, limit: SpamLimit::Count(7) });
+        sleep(600);
+        assert!(!r.running());
+        let l = log.0.lock().unwrap();
+        assert_eq!(l.iter().filter(|e| e.0).count(), 7);
+        assert_eq!(l.iter().filter(|e| !e.0).count(), 7);
+    }
+
+    #[test]
+    fn spam_limit_duration() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        r.start(Job::Spam { key: KeySpec::letter('e'), interval: 0.05, press: 0.0, jitter: 0.0, limit: SpamLimit::Duration(0.3) });
+        sleep(250);
+        assert!(r.running());
+        sleep(450);
+        assert!(!r.running());
+        let l = log.0.lock().unwrap();
+        let (d, u) = (l.iter().filter(|e| e.0).count(), l.iter().filter(|e| !e.0).count());
+        assert!((5..=7).contains(&d), "presses = {d}");
+        assert_eq!(d, u);
     }
 }

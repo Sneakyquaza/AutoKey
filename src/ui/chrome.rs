@@ -110,7 +110,7 @@ impl App {
     pub(super) fn settings_popup(&mut self, ui: &mut Ui, full: Rect, s: &mut Settings, rec: &Option<Recording>, acts: &mut Vec<Act>) {
         let lang = s.lang;
         let gear_right = full.max.x - 12.0 - 34.0 - 38.0 - 38.0;
-        let r = Rect::from_min_size(pos2(gear_right - 300.0, full.min.y + 52.0), vec2(300.0, 2.0 * 50.0 + 12.0));
+        let r = Rect::from_min_size(pos2(gear_right - 300.0, full.min.y + 52.0), vec2(300.0, 4.0 * 50.0 + 12.0));
         let p = ui.painter().clone();
         p.rect_filled(r.translate(vec2(0.0, 6.0)).expand(2.0), 14.0, Color32::from_black_alpha(90));
         p.rect(r, 12.0, SURFACE, sk(1.0, LINE2));
@@ -123,10 +123,21 @@ impl App {
         num_field(ui, nr, Id::new("pressms"), &mut s.press_ms, 0.0, config::MAX_PRESS_MS, true, 16.0, true, lang);
         inside |= ui.rect_contains_pointer(nr);
         text(&p, pos2(nr.max.x + 8.0, row(0.0)), Align2::LEFT_CENTER, "ms", 12.0, W::S, MUTED);
+        // aléa sur les délais
+        text(&p, pos2(r.min.x + 16.0, row(1.0)), Align2::LEFT_CENTER, tr(lang, "jitter"), 13.0, W::S, TEXT);
+        let jr = Rect::from_center_size(pos2(r.max.x - 16.0 - 40.0 - 22.0, row(1.0)), vec2(80.0, 36.0));
+        num_field(ui, jr, Id::new("jitterpct"), &mut s.jitter_pct, 0.0, config::MAX_JITTER_PCT, true, 16.0, true, lang);
+        inside |= ui.rect_contains_pointer(jr);
+        text(&p, pos2(jr.max.x + 8.0, row(1.0)), Align2::LEFT_CENTER, "%", 12.0, W::S, MUTED);
+        // bip démarrage / arrêt
+        text(&p, pos2(r.min.x + 16.0, row(2.0)), Align2::LEFT_CENTER, tr(lang, "beep"), 13.0, W::S, TEXT);
+        let br = Rect::from_center_size(pos2(r.max.x - 16.0 - 45.0, row(2.0)), vec2(90.0, 36.0));
+        segmented(ui, br, Id::new("beep"), &[(false, tr(lang, "off").into()), (true, tr(lang, "on").into())], &mut s.beep, 13.0, false);
+        inside |= ui.rect_contains_pointer(br);
         // arrêt d'urgence
-        text(&p, pos2(r.min.x + 16.0, row(1.0)), Align2::LEFT_CENTER, tr(lang, "stop_hk"), 13.0, W::S, TEXT);
+        text(&p, pos2(r.min.x + 16.0, row(3.0)), Align2::LEFT_CENTER, tr(lang, "stop_hk"), 13.0, W::S, TEXT);
         let (lbl, recording) = Self::rec_label(s, rec, Target::StopHotkey, combo_label(&s.stop_hotkey, lang));
-        let cr = Rect::from_center_size(pos2(r.max.x - 16.0 - 60.0, row(1.0)), vec2(120.0, 36.0));
+        let cr = Rect::from_center_size(pos2(r.max.x - 16.0 - 60.0, row(3.0)), vec2(120.0, 36.0));
         let resp = keycap(ui, cr, Id::new("stophk"), &lbl, recording, CapSize::Mid, lang, true).on_hover_text(tr(lang, "click_change"));
         inside |= resp.hovered();
         if resp.clicked() {
@@ -183,8 +194,17 @@ impl App {
         }
         let mut msg = tr(lang, "idle").to_string();
         let mut col = TEXT;
+        // temps écoulé (secondes entières)
+        let elapsed = match *st.started.lock().unwrap() {
+            Some(t) if running => {
+                let e = t.elapsed().as_secs();
+                format!(" · {}", if e == 0 { "0 s".to_string() } else { fmt_duration(lang, e as f64) })
+            }
+            _ => String::new(),
+        };
         if running && self.sh.runner.mode() == 0 {
             msg = trf(lang, "running_spam", &[("n", st.count.load(SeqCst).to_string())]);
+            msg += &elapsed;
         } else if running {
             let step = st.step.load(SeqCst);
             if step >= 0 {
@@ -199,6 +219,7 @@ impl App {
                         ("t", st.steps_total.load(SeqCst).to_string()),
                     ],
                 );
+                msg += &elapsed;
             }
         }
         let mut flash = self.sh.flash.lock().unwrap();

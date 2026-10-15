@@ -12,7 +12,20 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 10] = ["spam_fr", "spam_rec_en", "pattern_empty", "pattern_ex", "pattern_run", "pattern_pt", "modal", "update", "update_dl", "settings"];
+const SCENES: [&str; 12] = [
+    "spam_fr",
+    "spam_rec_en",
+    "pattern_empty",
+    "pattern_ex",
+    "pattern_run",
+    "pattern_pt",
+    "modal",
+    "update",
+    "update_dl",
+    "settings",
+    "spam_limit_pt",
+    "settings_pt",
+];
 
 pub fn init(app: &mut App) {
     if let Ok(dir) = std::env::var("AUTOKEY_SHOTS") {
@@ -60,6 +73,17 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
         }
         "update" | "update_dl" => s.mode = Mode::Spam,
         "settings" => s.mode = Mode::Spam,
+        "spam_limit_pt" => {
+            s.mode = Mode::Spam;
+            s.lang = Lang::Pt;
+            s.spam.limit = config::SpamLimit::Duration(90.0);
+        }
+        "settings_pt" => {
+            s.mode = Mode::Spam;
+            s.lang = Lang::Pt;
+            s.jitter_pct = 15.0;
+            s.beep = true;
+        }
         "pattern_pt" => {
             s.mode = Mode::Pattern;
             s.lang = Lang::Pt;
@@ -105,7 +129,7 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             app.open_settings_for_shots(false);
             setup(app, ctx, SCENES[st.scene]);
         }
-        if SCENES[st.scene] == "settings" && st.frame == 1 {
+        if SCENES[st.scene].starts_with("settings") && st.frame == 1 {
             app.open_settings_for_shots(true);
         }
         if SCENES[st.scene] == "modal" && st.frame == 1 {

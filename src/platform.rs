@@ -105,6 +105,13 @@ mod win {
         }
     }
 
+    /// Bip système (bloquant : appelé depuis un thread dédié)
+    pub fn beep(freq: u32, ms: u32) {
+        unsafe {
+            windows_sys::Win32::System::Diagnostics::Debug::Beep(freq, ms);
+        }
+    }
+
     /// Mutex nommé de session : une seule instance. Si une autre tourne encore (ex. ancien exe
     /// en train de quitter après une mise à jour), on attend jusqu'à 8 s qu'elle libère le mutex.
     pub fn single_instance() -> bool {
@@ -241,6 +248,17 @@ pub fn hires(on: bool) {
             win::hires(false);
         }
     }
+}
+
+/// Bip court non bloquant (thread dédié) : aigu au démarrage, grave à l'arrêt. No-op hors Windows.
+pub fn beep(start: bool) {
+    #[cfg(windows)]
+    {
+        let (f, ms) = if start { (1000, 60) } else { (600, 80) };
+        std::thread::spawn(move || win::beep(f, ms));
+    }
+    #[cfg(not(windows))]
+    let _ = start;
 }
 
 /// Une seule instance d'AutoKey par session. Faux : une autre instance tourne déjà.

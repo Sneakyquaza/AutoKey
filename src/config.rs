@@ -91,6 +91,22 @@ impl Step {
     }
 }
 
+/// Limite d'exécution du spam (arrêt automatique)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum SpamLimit {
+    #[default]
+    None,
+    /// Nombre de frappes
+    Count(u64),
+    /// Durée en secondes
+    Duration(f64),
+}
+
+pub const MAX_LIMIT_COUNT: u64 = 10_000_000;
+pub const MIN_LIMIT_S: f64 = 0.1;
+pub const MAX_LIMIT_S: f64 = 86_400.0;
+pub const MAX_JITTER_PCT: f64 = 50.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SpamCfg {
@@ -99,11 +115,12 @@ pub struct SpamCfg {
     pub unit: Unit,
     pub hotkey: Vec<KeySpec>,
     pub hk_mode: HkMode,
+    pub limit: SpamLimit,
 }
 
 impl Default for SpamCfg {
     fn default() -> Self {
-        SpamCfg { key: KeySpec::letter('e'), value: 100.0, unit: Unit::Ms, hotkey: vec![KeySpec::vk(0x75)], hk_mode: HkMode::Toggle }
+        SpamCfg { key: KeySpec::letter('e'), value: 100.0, unit: Unit::Ms, hotkey: vec![KeySpec::vk(0x75)], hk_mode: HkMode::Toggle, limit: SpamLimit::None }
     }
 }
 
@@ -135,6 +152,10 @@ pub struct Settings {
     pub press_ms: f64,
     /// Raccourci d'arrêt d'urgence (arrête tout, quel que soit le mode)
     pub stop_hotkey: Vec<KeySpec>,
+    /// Aléa sur les intervalles (± %, 0–50)
+    pub jitter_pct: f64,
+    /// Bip au démarrage / à l'arrêt
+    pub beep: bool,
 }
 
 /// Durée d'appui par défaut (ms)
@@ -152,6 +173,8 @@ impl Default for Settings {
             pattern: PatternCfg::default(),
             press_ms: DEFAULT_PRESS_MS,
             stop_hotkey: vec![KeySpec::vk(0x77)],
+            jitter_pct: 0.0,
+            beep: false,
         }
     }
 }
@@ -220,6 +243,12 @@ pub fn sanitize(s: &mut Settings) {
     if secs(s.spam.value, s.spam.unit) < MIN_INTERVAL_S {
         s.spam.value = MIN_INTERVAL_S / s.spam.unit.factor();
     }
+    s.spam.limit = match s.spam.limit {
+        SpamLimit::None => SpamLimit::None,
+        SpamLimit::Count(n) => SpamLimit::Count(n.clamp(1, MAX_LIMIT_COUNT)),
+        SpamLimit::Duration(d) => SpamLimit::Duration(clamp_f(d, MIN_LIMIT_S, MAX_LIMIT_S, 60.0)),
+    };
+    s.jitter_pct = clamp_f(s.jitter_pct, 0.0, MAX_JITTER_PCT, 0.0);
     s.spam.hotkey.truncate(6);
     s.stop_hotkey.truncate(6);
     s.press_ms = clamp_f(s.press_ms, 0.0, MAX_PRESS_MS, DEFAULT_PRESS_MS);
@@ -420,6 +449,39 @@ mod tests {
         assert_eq!(s.spam.key, SpamCfg::default().key);
         assert_eq!(s.pattern, PatternCfg::default());
         assert!(!t.0.join("config3.bad.json").exists());
+    }
+
+    #[test]
+    fn new_fields_defaults_and_compat() {
+        let t = Tmp::new();
+        std::fs::write(t.file(), r#"{"spam":{"value":250.0}}"#).unwrap();
+        let s = load_from(&t.file());
+        assert_eq!(s.spam.limit, SpamLimit::None);
+        assert_eq!(s.jitter_pct, 0.0);
+        assert!(!s.beep);
+        std::fs::write(t.file(), r#"{"jitter_pct":12.5,"beep":true,"spam":{"limit":{"Count":42}}}"#).unwrap();
+        let s = load_from(&t.file());
+        assert_eq!((s.jitter_pct, s.beep, s.spam.limit), (12.5, true, SpamLimit::Count(42)));
+    }
+
+    #[test]
+    fn sanitize_limit_and_jitter() {
+        let mut s = Settings::default();
+        for (v, want) in [(-5.0, 0.0), (20.0, 20.0), (99.0, 50.0), (f64::NAN, 0.0)] {
+            s.jitter_pct = v;
+            sanitize(&mut s);
+            assert_eq!(s.jitter_pct, want);
+        }
+        for (v, want) in [(0, 1), (5, 5), (u64::MAX, MAX_LIMIT_COUNT)] {
+            s.spam.limit = SpamLimit::Count(v);
+            sanitize(&mut s);
+            assert_eq!(s.spam.limit, SpamLimit::Count(want));
+        }
+        for (v, want) in [(0.0, 0.1), (30.0, 30.0), (1e9, 86_400.0), (f64::NAN, 60.0)] {
+            s.spam.limit = SpamLimit::Duration(v);
+            sanitize(&mut s);
+            assert_eq!(s.spam.limit, SpamLimit::Duration(want));
+        }
     }
 
     #[test]

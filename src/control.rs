@@ -105,8 +105,15 @@ impl Shared {
         }
         let job = {
             let s = self.settings.lock().unwrap();
+            self.runner.beep.store(s.beep, SeqCst);
             match m {
-                Mode::Spam => Job::Spam { key: s.spam.key.clone(), interval: config::secs(s.spam.value, s.spam.unit), press: s.press_ms / 1000.0 },
+                Mode::Spam => Job::Spam {
+                    key: s.spam.key.clone(),
+                    interval: config::secs(s.spam.value, s.spam.unit),
+                    press: s.press_ms / 1000.0,
+                    jitter: s.jitter_pct / 100.0,
+                    limit: s.spam.limit,
+                },
                 Mode::Pattern => {
                     if s.pattern.steps.is_empty() {
                         drop(s);
@@ -124,7 +131,7 @@ impl Shared {
                             Step::Wait { value, unit } => CStep::Wait(config::secs(*value, *unit)),
                         })
                         .collect();
-                    Job::Pattern { steps, loops: s.pattern.loops }
+                    Job::Pattern { steps, loops: s.pattern.loops, jitter: s.jitter_pct / 100.0 }
                 }
             }
         };

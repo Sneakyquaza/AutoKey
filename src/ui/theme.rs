@@ -25,7 +25,7 @@ pub(super) const GREEN: Color32 = rgb(0x34D399);
 pub const WIDTH: f32 = 1120.0;
 pub fn height_for(m: Mode) -> f32 {
     match m {
-        Mode::Spam => 420.0,
+        Mode::Spam => 470.0,
         Mode::Pattern => 530.0,
     }
 }

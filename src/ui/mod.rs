@@ -1,5 +1,5 @@
 //! Interface : tout est dessiné à la main (egui) pour un rendu sur mesure.
-use crate::config::{self, HkMode, Mode, PatternFile, Settings, Step, Unit};
+use crate::config::{self, HkMode, Mode, PatternFile, Settings, SpamLimit, Step, Unit};
 use crate::control::{Recording, Shared, Target};
 use crate::i18n::{fmt_duration, fmt_num, tr, trf, Lang};
 use crate::keys::combo_label;
