@@ -1,7 +1,19 @@
-# 3.4.1
-- [fr] Nouvelle fenêtre de mise à jour : version actuelle → nouvelle version, avec la liste des nouveautés
-- [fr] Le bouton « Mettre à jour » demande confirmation avant de télécharger
-- [en] New update window: current version → new version, with a list of what's new
-- [en] The "Update" button now asks for confirmation before downloading
-- [pt] Nova janela de atualização: versão atual → nova versão, com a lista de novidades
-- [pt] O botão "Atualizar" agora pede confirmação antes de baixar
+# 3.4.2
+- [fr] Arrêt immédiat même sur les patterns très rapides, sans touche envoyée après l'arrêt
+- [fr] Échap ferme fenêtres et menus, Entrée valide les confirmations
+- [fr] Mises à jour plus sûres (anti-retour en arrière) et nouvel essai possible après un échec
+- [fr] Confirmation avant « Exemple » et avant un import contenant des touches sensibles (Win, Ctrl+Alt)
+- [fr] La molette ne modifie plus un champ sans clic dessus ; affichage des durées corrigé
+- [fr] Réglages mieux sauvegardés (fichiers édités à la main acceptés, nouvel essai en cas d'échec)
+- [en] Stops instantly even on very fast patterns, no key sent after stopping
+- [en] Esc closes windows and menus, Enter confirms dialogs
+- [en] Safer updates (anti-rollback) and retry possible after a failure
+- [en] Confirmation before "Example" and before importing sensitive keys (Win, Ctrl+Alt)
+- [en] Mouse wheel no longer changes a field unless clicked; duration display fixed
+- [en] More reliable settings saving (hand-edited files accepted, retry on failure)
+- [pt] Parada imediata mesmo em padrões muito rápidos, sem tecla enviada após parar
+- [pt] Esc fecha janelas e menus, Enter confirma as caixas de diálogo
+- [pt] Atualizações mais seguras (anti-retrocesso) e nova tentativa após uma falha
+- [pt] Confirmação antes de "Exemplo" e antes de importar teclas sensíveis (Win, Ctrl+Alt)
+- [pt] A roda do mouse não altera mais um campo sem clicar nele; exibição de durações corrigida
+- [pt] Salvamento das configurações mais confiável (arquivos editados à mão aceitos, nova tentativa)
