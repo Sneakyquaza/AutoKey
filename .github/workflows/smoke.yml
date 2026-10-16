@@ -1,0 +1,62 @@
+name: Smoke test Windows
+
+# Test bout-en-bout du vrai exe (SendInput, fenêtres) sur un runner Windows interactif.
+# Appelé par build.yml (artifact AutoKey, bloque la release) ; seul, il compile l'exe lui-même.
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        description: "Nom de l'artifact contenant AutoKey.exe (vide = compiler depuis les sources)"
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+  push:
+    branches: ["main", "ci/**"]
+    paths-ignore: ["**/*.md"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: inputs.artifact != ''
+        with:
+          name: ${{ inputs.artifact }}
+          path: smoke-bin
+
+      - name: Toolchain (rust-toolchain.toml)
+        if: inputs.artifact == ''
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: inputs.artifact == ''
+
+      - name: Compilation
+        if: inputs.artifact == ''
+        run: cargo build --release --locked
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $exe = if ("${{ inputs.artifact }}" -ne "") { "smoke-bin\AutoKey.exe" } else { "target\release\autokey.exe" }
+          pwsh -NoProfile -File scripts/smoke-windows.ps1 $exe
+          exit $LASTEXITCODE
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: smoke-out
+          path: smoke-out
+          if-no-files-found: warn

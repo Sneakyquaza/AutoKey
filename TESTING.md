@@ -15,6 +15,8 @@ git config core.hooksPath .githooks
 
 La CI (`.github/workflows/ci.yml`) refait fmt, clippy Linux/Windows, tests et `cargo audit` (bloquant) à chaque push. La release (`build.yml`, tag `v*`) rejoue les tests et l'audit avant de publier.
 
+Le smoke test Windows (`.github/workflows/smoke.yml`, `scripts/smoke-windows.ps1`, bloque la release) couvre automatiquement sur le vrai exe : démarrage, config lue, raccourcis F6/F8 réels (SendInput), frappes reçues puis arrêt net, 2e instance, fermeture propre et config intacte ; captures en artifact `smoke-out`. Reste manuel : tray, MAJ, multi-écrans, rendu.
+
 ## Tout lancer en une commande
 
 ```sh

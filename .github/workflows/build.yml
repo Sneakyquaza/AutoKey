@@ -88,8 +88,17 @@ jobs:
       - name: Audit de sécurité des dépendances (RustSec) — bloquant
         run: cargo audit
 
+  # test bout-en-bout de l'exe construit (runner Windows interactif) : bloque la release s'il échoue
+  smoke:
+    needs: build
+    permissions:
+      contents: read
+    uses: ./.github/workflows/smoke.yml
+    with:
+      artifact: AutoKey
+
   release:
-    needs: [build, audit]
+    needs: [build, audit, smoke]
     runs-on: ubuntu-latest
     # droits minimum : publier la release + attester la provenance de l'exe
     permissions:
