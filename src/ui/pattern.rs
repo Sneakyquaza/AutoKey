@@ -53,14 +53,18 @@ impl App {
                     match *key {
                         "macro_rec" => acts.push(Act::MacroToggle),
                         "example" => {
-                            s.pattern.steps = config::example_steps();
-                            acts.push(Act::StepsChanged);
+                            if s.pattern.steps.is_empty() {
+                                s.pattern.steps = config::example_steps();
+                                acts.push(Act::StepsChanged);
+                            } else {
+                                self.confirm = Some(Confirm::Example);
+                            }
                         }
                         "open" => acts.push(Act::OpenPreset),
                         "save" => acts.push(Act::SavePreset),
                         _ => {
                             if !s.pattern.steps.is_empty() {
-                                self.confirm_clear = true;
+                                self.confirm = Some(Confirm::Clear);
                             }
                         }
                     }
@@ -84,7 +88,10 @@ impl App {
         tip_after(ui, t, "loops", tr(lang, "tip_loops"));
         let ry = loops_r.min.y + 40.0;
         let inf = s.pattern.loops == 0;
-        let mut lv = if inf { 1.0 } else { s.pattern.loops as f64 };
+        if !inf {
+            self.loops_prev = s.pattern.loops;
+        }
+        let mut lv = if inf { self.loops_prev as f64 } else { s.pattern.loops as f64 };
         let minus = Rect::from_min_size(pos2(loops_r.min.x + 16.0, ry), vec2(36.0, 36.0));
         let numr = Rect::from_min_size(pos2(minus.max.x + 6.0, ry), vec2(76.0, 36.0));
         let plus = Rect::from_min_size(pos2(numr.max.x + 6.0, ry), vec2(36.0, 36.0));
@@ -97,7 +104,12 @@ impl App {
                 lv = (lv + d).clamp(1.0, 999_999.0);
             }
         }
-        num_field(ui, numr, Id::new("loops"), &mut lv, 1.0, 999_999.0, true, 17.0, !inf, lang);
+        if inf {
+            p.rect(numr, 10.0, SURFACE2, sk(1.0, LINE2));
+            text(&p, numr.center(), Align2::CENTER_CENTER, "∞", 17.0, W::B, DIM);
+        } else {
+            num_field(ui, numr, Id::new("loops"), &mut lv, 1.0, 999_999.0, true, 17.0, true, lang);
+        }
         let (resp, _) = tool_btn(ui, pos2(plus.max.x + 8.0, ry), 36.0, Id::new("inf"), Ic::Loop, TEXT, tr(lang, "infinite"), inf);
         let mut new_inf = inf;
         if resp.clicked() {
@@ -212,6 +224,14 @@ impl App {
         self.last_active = active;
 
         let steps = &mut s.pattern.steps;
+        // limite de la config : ajout et duplication refusés (sinon `sanitize` couperait en silence)
+        if steps.len() >= config::MAX_STEPS && (matches!(add, Some(k) if k != "example") || matches!(action, Some(("copy", _)))) {
+            add = None;
+            if matches!(action, Some(("copy", _))) {
+                action = None;
+            }
+            self.flash("steps_max");
+        }
         if let Some(kind) = add {
             match kind {
                 "hold" => steps.push(Step::new_hold()),
@@ -312,7 +332,7 @@ impl App {
                 if num_field(ui, field(row1), id.with("cnt"), &mut cv, 1.0, 100_000.0, true, 17.0, true, lang) {
                     *count = cv as u32;
                 }
-                text(&p, pos2(row2.min.x + 2.0, row2.center().y), Align2::LEFT_CENTER, &format!("{} (ms)", tr(lang, "gap")), 12.0, W::R, MUTED);
+                text(&p, pos2(row2.min.x + 2.0, row2.center().y), Align2::LEFT_CENTER, tr(lang, "gap_ms"), 12.0, W::R, MUTED);
                 num_field(ui, field(row2), id.with("gap"), gap, 0.0, 600_000.0, false, 17.0, true, lang);
             }
         }

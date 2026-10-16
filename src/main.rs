@@ -338,7 +338,7 @@ impl ApplicationHandler<UserEvent> for Runner {
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         match self.next_frame {
             Some(t) => {
-                // limite à 60 i/s : on regroupe les demandes trop rapprochées
+                // limite à 30 i/s : on regroupe les demandes trop rapprochées
                 let t = t.max(self.last_frame + MIN_FRAME);
                 if Instant::now() >= t {
                     self.next_frame = None;
@@ -371,13 +371,13 @@ fn main() {
     }));
     let settings = config::load();
     let (mode, pin, compact) = (settings.mode, settings.pin, settings.compact);
-    let (auto_check, hide_at_start) = (settings.auto_check_updates, settings.tray && settings.start_minimized);
+    let hide_at_start = settings.tray && settings.start_minimized;
 
     let shared = control::Shared::new(settings, platform::keyboard());
     platform::start_test_input();
     control::spawn_poller(shared.clone());
     let updater = update::Updater::new(shared.clone());
-    updater.spawn_checker(auto_check);
+    updater.spawn_checker();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
     let proxy = event_loop.create_proxy();

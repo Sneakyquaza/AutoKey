@@ -292,9 +292,8 @@ impl Renderer {
                 }
             };
             for (i, (bbox, clip, tex, mesh)) in entry.prims.iter().enumerate() {
-                // non hachable → empreinte unique : toujours considéré comme modifié
-                let hash =
-                    if hashable { key ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) } else { self.prev.len() as u64 ^ 0xF00D ^ (prims.len() as u64) << 20 };
+                // non hachable → empreinte réservée : toujours considéré comme modifié (cf. dommages ci-dessous)
+                let hash = if hashable { key ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) } else { UNHASHABLE };
                 prims.push(Prim { hash, bbox: *bbox, clip: *clip, tex: *tex, mesh: mesh.clone() });
             }
             if hashable {
@@ -310,9 +309,17 @@ impl Renderer {
         } else {
             let mut old: HashMap<u64, Vec<IRect>> = HashMap::new();
             for (hsh, b) in &self.prev {
-                old.entry(*hsh).or_default().push(*b);
+                if *hsh == UNHASHABLE {
+                    damage.push(*b);
+                } else {
+                    old.entry(*hsh).or_default().push(*b);
+                }
             }
             for p in &prims {
+                if p.hash == UNHASHABLE {
+                    damage.push(p.bbox);
+                    continue;
+                }
                 match old.get_mut(&p.hash).and_then(|v| v.pop()) {
                     Some(_) => {}
                     None => damage.push(p.bbox),
@@ -361,9 +368,17 @@ impl Renderer {
     }
 }
 
+/// Empreinte réservée aux formes non hachables (toujours redessinées)
+const UNHASHABLE: u64 = 0xF00D_F00D_F00D_F00D;
+
 /// Fusionne les zones qui se chevauchent ; trop de zones → une seule englobante.
 fn merge(mut v: Vec<IRect>, screen: &IRect) -> Vec<IRect> {
     v.retain(|r| !r.inter(screen).empty());
+    // trop de rectangles : union englobante directe (évite la fusion quadratique)
+    if v.len() > 64 {
+        let u = v.iter().skip(1).fold(v[0], |a, b| a.union(b));
+        return vec![u.inter(screen)];
+    }
     let mut changed = true;
     while changed {
         changed = false;

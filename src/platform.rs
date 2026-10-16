@@ -129,12 +129,26 @@ mod win {
                 let ok = r == WAIT_OBJECT_0 || r == WAIT_ABANDONED;
                 if !ok {
                     // la première instance tourne vraiment (peut-être cachée dans la zone de notification) : on la réaffiche
-                    tray::wake_existing();
+                    if !tray::wake_existing() {
+                        // aucune fenêtre à réveiller (instance bloquée ou sans icône) : on prévient l'utilisateur
+                        already_running_box();
+                    }
                 }
                 return ok;
             }
         }
         true
+    }
+
+    /// Boîte de dialogue courte « déjà en cours d'exécution » (langue lue dans la config)
+    fn already_running_box() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+        let w = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+        let lang = crate::config::load().lang;
+        let (title, text) = ("AutoKey", crate::i18n::tr(lang, "already_running"));
+        unsafe {
+            MessageBoxW(std::ptr::null_mut(), w(text).as_ptr(), w(title).as_ptr(), MB_OK | MB_ICONINFORMATION);
+        }
     }
 
     /// Rend au système la mémoire qui n'a servi qu'à l'initialisation
@@ -434,12 +448,15 @@ mod win {
         }
 
         /// Demande à une autre instance (fenêtre cachée dans la zone de notification) de se réafficher
-        pub fn wake_existing() {
+        /// `true` si la fenêtre de l'icône a été trouvée et prévenue
+        pub fn wake_existing() -> bool {
             unsafe {
                 let h = FindWindowW(wide(CLASS).as_ptr(), std::ptr::null());
-                if !h.is_null() {
-                    PostMessageW(h, WM_SHOW, 0, 0);
+                if h.is_null() {
+                    return false;
                 }
+                PostMessageW(h, WM_SHOW, 0, 0);
+                true
             }
         }
     }

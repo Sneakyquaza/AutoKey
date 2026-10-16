@@ -9,7 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Renseignés par la CI GitHub (owner/repo et numéro de build). Absents en build local → pas de mise à jour.
 pub const REPO: Option<&str> = option_env!("AUTOKEY_REPO");
@@ -20,6 +20,8 @@ const SHA_ASSET: &str = "AutoKey.exe.sha256";
 const SIG_ASSET: &str = "AutoKey.exe.minisig";
 /// Clé publique minisign des releases (la clé privée est dans le secret GitHub MINISIGN_KEY).
 const PUBKEY: &str = "RWRpMB1oOVO8oAhJTqnFniOXTkaykl7/VHz7aPE2WQodN+jhG6DtcX6V";
+/// Intervalle entre deux vérifications automatiques
+const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 const MAX_EXE: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,7 +29,6 @@ pub enum UpState {
     Idle,
     Available { build: u64, version: Option<String>, notes: Vec<(String, String)>, exe_url: String, sha_url: String, sig_url: String },
     Downloading(u8),
-    Failed(&'static str),
     Restarting,
 }
 
@@ -162,11 +163,26 @@ pub fn verify(data: &[u8], got: &[u8; 32], expected: &[u8; 32]) -> Result<(), &'
     Ok(())
 }
 
-/// La signature minisign (fichier .minisig) doit correspondre aux données et à la clé publique
-pub fn verify_sig(data: &[u8], sig_txt: &str, pubkey_b64: &str) -> Result<(), &'static str> {
+/// Numéro de build lu dans le commentaire de confiance minisign, format exact « autokey build=<N> »
+pub fn parse_trusted_build(comment: &str) -> Option<u64> {
+    let n = comment.trim().strip_prefix("autokey build=")?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    n.parse().ok()
+}
+
+/// La signature minisign (fichier .minisig) doit correspondre aux données et à la clé publique.
+/// Son commentaire de confiance (couvert par la signature globale, vérifiée par `verify`) lie l'exe à son
+/// numéro de build : il doit égaler `build` (release annoncée) et dépasser `cur` (anti-retour en arrière).
+pub fn verify_sig(data: &[u8], sig_txt: &str, pubkey_b64: &str, build: u64, cur: u64) -> Result<(), &'static str> {
     let pk = minisign_verify::PublicKey::from_base64(pubkey_b64).map_err(|_| "up_bad")?;
     let sig = minisign_verify::Signature::decode(sig_txt).map_err(|_| "up_bad")?;
-    pk.verify(data, &sig, false).map_err(|_| "up_bad")
+    pk.verify(data, &sig, false).map_err(|_| "up_bad")?;
+    match parse_trusted_build(sig.trusted_comment()) {
+        Some(n) if n == build && n > cur => Ok(()),
+        _ => Err("up_bad"),
+    }
 }
 
 /// Remplace l'exe : actuel → .old, nouveau → nom d'origine. Retour arrière si une étape échoue.
@@ -209,22 +225,27 @@ impl Updater {
         Ok(parse_release(&body, repo, current_build()))
     }
 
-    /// Nettoie l'ancien exe après une mise à jour ; si `auto`, vérifie au démarrage puis toutes les 6 h.
-    pub fn spawn_checker(self: &Arc<Self>, auto: bool) {
+    /// Nettoie l'ancien exe après une mise à jour, puis vérifie toutes les 6 h si le réglage
+    /// `auto_check_updates` est actif. Le réglage est relu chaque minute : l'activer à chaud déclenche une vérif.
+    pub fn spawn_checker(self: &Arc<Self>) {
         let me = self.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(4));
             if let Ok(exe) = std::env::current_exe() {
                 let _ = std::fs::remove_file(old_path(&exe));
+                let _ = std::fs::remove_file(exe.with_extension("update.tmp"));
             }
-            let (Some(repo), true, true) = (REPO, current_build() > 0, auto) else { return };
+            let (Some(repo), true) = (REPO, current_build() > 0) else { return };
+            let mut last: Option<Instant> = None;
             loop {
-                if matches!(me.state(), UpState::Idle | UpState::Failed(_)) {
+                let auto = me.sh.settings.lock().unwrap().auto_check_updates;
+                if auto && last.is_none_or(|t| t.elapsed() >= CHECK_EVERY) && matches!(me.state(), UpState::Idle) {
+                    last = Some(Instant::now());
                     if let Ok(Some(r)) = Self::fetch_latest(repo) {
                         me.set(r.into());
                     }
                 }
-                std::thread::sleep(Duration::from_secs(6 * 3600));
+                std::thread::sleep(Duration::from_secs(60));
             }
         });
     }
@@ -233,7 +254,7 @@ impl Updater {
     pub fn check_now(self: &Arc<Self>) {
         {
             let mut c = self.check.lock().unwrap();
-            if *c == Check::Busy || !matches!(self.state(), UpState::Idle | UpState::Failed(_)) {
+            if *c == Check::Busy || !matches!(self.state(), UpState::Idle) {
                 return;
             }
             *c = Check::Busy;
@@ -258,17 +279,27 @@ impl Updater {
     }
 
     pub fn install(self: &Arc<Self>) {
-        let UpState::Available { exe_url, sha_url, sig_url, .. } = self.state() else { return };
-        self.set(UpState::Downloading(0));
+        // Available → Downloading sous un seul verrou : un double clic ne lance pas deux téléchargements
+        let prev = {
+            let mut st = self.state.lock().unwrap();
+            if !matches!(*st, UpState::Available { .. }) {
+                return;
+            }
+            std::mem::replace(&mut *st, UpState::Downloading(0))
+        };
+        self.sh.repaint();
+        let UpState::Available { build, exe_url, sha_url, sig_url, .. } = prev.clone() else { return };
         let me = self.clone();
         std::thread::spawn(move || {
-            if let Err(e) = me.do_install(&exe_url, &sha_url, &sig_url) {
-                me.set(UpState::Failed(e));
+            if let Err(e) = me.do_install(build, &exe_url, &sha_url, &sig_url) {
+                // la release est conservée (bouton « Mettre à jour » à nouveau disponible), l'erreur s'affiche en pied de page
+                *me.sh.flash.lock().unwrap() = Some((e, Instant::now()));
+                me.set(prev);
             }
         });
     }
 
-    fn do_install(&self, exe_url: &str, sha_url: &str, sig_url: &str) -> Result<(), &'static str> {
+    fn do_install(&self, build: u64, exe_url: &str, sha_url: &str, sig_url: &str) -> Result<(), &'static str> {
         let ag = agent();
         // 1) empreinte attendue
         let sha_txt = ag.get(sha_url).call().map_err(|_| "up_net")?.into_string().map_err(|_| "up_net")?;
@@ -306,7 +337,7 @@ impl Updater {
         // 3) vérifications
         let got: [u8; 32] = hasher.finalize().into();
         verify(&data, &got, &expected)?;
-        verify_sig(&data, &sig_txt, PUBKEY)?;
+        verify_sig(&data, &sig_txt, PUBKEY, build, current_build())?;
         // 4) remplacement : exe actuel → .old, nouveau → nom d'origine (retour arrière si échec)
         let exe = std::env::current_exe().map_err(|_| "up_io")?;
         swap_exe(&exe, &data)?;
@@ -385,16 +416,35 @@ mod tests {
     #[test]
     fn signature_valid() {
         assert_eq!(&FX_DATA[..2], b"MZ");
-        assert!(verify_sig(FX_DATA, FX_SIG, fx_key()).is_ok());
+        assert!(verify_sig(FX_DATA, FX_SIG, fx_key(), 100, 99).is_ok());
     }
 
     #[test]
     fn signature_rejects_tampering() {
         let mut bad = FX_DATA.to_vec();
         bad[100] ^= 1;
-        assert_eq!(verify_sig(&bad, FX_SIG, fx_key()), Err("up_bad"), "donnée modifiée");
-        assert_eq!(verify_sig(FX_DATA, FX_SIG, PUBKEY), Err("up_bad"), "mauvaise clé");
-        assert_eq!(verify_sig(FX_DATA, "n'importe quoi", fx_key()), Err("up_bad"), "signature illisible");
+        assert_eq!(verify_sig(&bad, FX_SIG, fx_key(), 100, 99), Err("up_bad"), "donnée modifiée");
+        assert_eq!(verify_sig(FX_DATA, FX_SIG, PUBKEY, 100, 99), Err("up_bad"), "mauvaise clé");
+        assert_eq!(verify_sig(FX_DATA, "n'importe quoi", fx_key(), 100, 99), Err("up_bad"), "signature illisible");
+    }
+
+    #[test]
+    fn signature_binds_build() {
+        assert_eq!(verify_sig(FX_DATA, FX_SIG, fx_key(), 101, 99), Err("up_bad"), "build annoncé différent");
+        assert_eq!(verify_sig(FX_DATA, FX_SIG, fx_key(), 100, 100), Err("up_bad"), "pas plus récent : retour en arrière");
+        assert_eq!(verify_sig(FX_DATA, FX_SIG, fx_key(), 100, 150), Err("up_bad"), "build plus ancien que l'actuel");
+        // commentaire de confiance modifié : la signature globale ne correspond plus
+        let forged = FX_SIG.replace("autokey build=100", "autokey build=200");
+        assert_ne!(forged, FX_SIG);
+        assert_eq!(verify_sig(FX_DATA, &forged, fx_key(), 200, 99), Err("up_bad"));
+    }
+
+    #[test]
+    fn trusted_build_parsing() {
+        assert_eq!(parse_trusted_build("autokey build=42"), Some(42));
+        for bad in ["", "autokey build=", "autokey build=-1", "autokey build=4x", "AutoKey build 42", "autokey build=99999999999999999999999"] {
+            assert_eq!(parse_trusted_build(bad), None, "{bad}");
+        }
     }
 
     #[test]

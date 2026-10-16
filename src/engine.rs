@@ -196,20 +196,32 @@ impl Runner {
         let (kb, status, stop2) = (self.kb.clone(), self.status.clone(), stop.clone());
         let h = std::thread::spawn(move || {
             crate::platform::hires(true);
+            // nettoyage garanti, même si `run_job` panique
+            let _end = EndGuard(&status);
             if beep {
                 crate::platform::beep(true);
             }
             run_job(&*kb, &status, &stop2, focus, job);
-            status.paused.store(false, SeqCst);
-            status.waiting.store(false, SeqCst);
-            crate::platform::hires(false);
-            status.step.store(-1, SeqCst);
-            status.running.store(false, SeqCst);
+            drop(_end);
             if beep {
                 crate::platform::beep(false);
             }
         });
         *self.cur.lock().unwrap() = Some((stop, h));
+    }
+}
+
+/// Fin de tâche : remet l'état à zéro et rééquilibre `hires(true)` (aussi en cas de panique)
+struct EndGuard<'a>(&'a Status);
+
+impl Drop for EndGuard<'_> {
+    fn drop(&mut self) {
+        let st = self.0;
+        st.paused.store(false, SeqCst);
+        st.waiting.store(false, SeqCst);
+        crate::platform::hires(false);
+        st.step.store(-1, SeqCst);
+        st.running.store(false, SeqCst);
     }
 }
 
@@ -255,6 +267,9 @@ impl Gate<'_> {
     /// relâchée et le temps ne s'écoule pas ; à la reprise elle est re-pressée pour la durée restante.
     /// Renvoie false si arrêt demandé. Aucune touche n'est laissée enfoncée.
     fn run(&self, held: Option<&KeySpec>, secs: f64) -> bool {
+        if self.stop.is_set() {
+            return false; // arrêt déjà demandé : aucune frappe de plus
+        }
         let mut rem = Duration::from_secs_f64(secs.max(0.0));
         if let Some(k) = held {
             if self.blocked() && !self.pause() {
@@ -350,6 +365,7 @@ fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, focus: Option<Arc<dyn Fo
             'outer: while loops == 0 || i < loops {
                 i += 1;
                 st.loop_i.store(i, SeqCst);
+                let lap = Instant::now();
                 for (n, s) in steps.iter().enumerate() {
                     st.step.store(n as i32, SeqCst);
                     let ok = match s {
@@ -371,6 +387,10 @@ fn run_job(kb: &dyn Keyboard, st: &Status, stop: &Stop, focus: Option<Arc<dyn Fo
                     if !ok || stop.is_set() {
                         break 'outer;
                     }
+                }
+                // tour sans attente réelle (ex. Wait(0) en boucle infinie) : pas de boucle active
+                if lap.elapsed() < Duration::from_millis(1) && !stop.wait(0.001) {
+                    break;
                 }
             }
         }
@@ -394,6 +414,63 @@ pub mod tests {
 
     fn sleep(ms: u64) {
         std::thread::sleep(Duration::from_millis(ms))
+    }
+
+    #[test]
+    fn stop_before_run_sends_nothing() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        let stop = Stop::new();
+        stop.set();
+        let st = Status::default();
+        let g = Gate { kb: &*log, st: &st, stop: &stop, focus: None, limit: None };
+        assert!(!g.run(Some(&KeySpec::letter('e')), 0.0));
+        assert!(log.0.lock().unwrap().is_empty());
+        drop(r);
+    }
+
+    #[test]
+    fn press_flood_stops_fast() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log.clone());
+        r.start(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 100_000, 0.0, 0.0)], loops: 1, jitter: 0.0 });
+        sleep(20);
+        let t = Instant::now();
+        r.stop();
+        assert!(t.elapsed() < Duration::from_millis(500));
+        assert!(!r.running());
+        let n = log.0.lock().unwrap().len();
+        assert!(n < 200_000, "n = {n}");
+        sleep(20);
+        assert_eq!(log.0.lock().unwrap().len(), n, "plus aucune frappe après stop");
+    }
+
+    #[test]
+    fn empty_wait_loop_is_throttled_and_stops() {
+        let log = Arc::new(Log::default());
+        let r = Runner::new(log);
+        r.start(Job::Pattern { steps: vec![CStep::Wait(0.0)], loops: 0, jitter: 0.0 });
+        sleep(100);
+        assert!(r.running());
+        let loops = r.status.loop_i.load(SeqCst);
+        assert!(loops < 500, "boucle active : {loops}");
+        r.stop();
+        assert!(!r.running());
+    }
+
+    #[test]
+    fn end_guard_resets_status() {
+        let st = Status::default();
+        st.running.store(true, SeqCst);
+        st.paused.store(true, SeqCst);
+        st.step.store(3, SeqCst);
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = EndGuard(&st);
+            panic!("test");
+        }));
+        assert!(res.is_err());
+        assert!(!st.running.load(SeqCst) && !st.paused.load(SeqCst));
+        assert_eq!(st.step.load(SeqCst), -1);
     }
 
     #[test]

@@ -156,7 +156,7 @@ impl App {
         label(ui, x0, ym, lw(90.0), tr(lang, "start_min"), if sm_ok { TEXT } else { DIM }, "startmin", tr(lang, "tip_startmin"));
         toggle(ui, x1, ym, "startmin", &mut s.start_minimized, sm_ok, lang);
         y += ROW_H;
-        let st = if sys_ok { platform::autostart_state() } else { AutoStart::Off };
+        let st = if sys_ok { *self.autostart.get_or_insert_with(platform::autostart_state) } else { AutoStart::Off };
         let rh = if st == AutoStart::OtherPath { ROW_H + 30.0 } else { ROW_H };
         let ym = y + ROW_H / 2.0;
         label(ui, x0, ym, lw(90.0), tr(lang, "autostart"), col, "autostart", tr(lang, "tip_autostart"));
@@ -229,7 +229,7 @@ impl App {
         let ym = y + ROW_H / 2.0;
         label(ui, x0, ym, lw(130.0), tr(lang, "d_reset"), TEXT, "reset", tr(lang, "tip_reset"));
         if action(ui, x1, ym, "d_reset", tr(lang, "d_reset_btn"), 130.0, true, true) {
-            self.confirm_reset = true;
+            self.confirm = Some(Confirm::Reset);
         }
         y += ROW_H + 8.0;
 

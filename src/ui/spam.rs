@@ -104,13 +104,17 @@ impl App {
             }
         }
         let iv = config::secs(s.spam.value, s.spam.unit).max(config::MIN_INTERVAL_S);
-        rhythm(&p, Rect::from_min_size(pos2(int_r.min.x + 18.0, int_r.max.y - 84.0), vec2(iw - 36.0, 46.0)), iv);
+        rhythm(&p, Rect::from_min_size(pos2(int_r.min.x + 18.0, int_r.max.y - 84.0), vec2(iw - 36.0, 46.0)), iv, lang);
         let rate = if iv <= 1.0 {
             trf(lang, "rate_s", &[("n", fmt_num(lang, (10.0 / iv).round() / 10.0))])
         } else if iv <= 60.0 {
             trf(lang, "rate_m", &[("n", fmt_num(lang, (600.0 / iv).round() / 10.0))])
-        } else {
+        } else if iv <= 36000.0 {
             trf(lang, "rate_h", &[("n", fmt_num(lang, (36000.0 / iv).round() / 10.0))])
+        } else if iv <= 864_000.0 {
+            trf(lang, "rate_d", &[("n", fmt_num(lang, (864_000.0 / iv).round() / 10.0))])
+        } else {
+            tr(lang, "rate_lt").to_string()
         };
         text(&p, pos2(int_r.min.x + 18.0, int_r.max.y - 24.0), Align2::LEFT_CENTER, &rate, 12.0, W::S, CYAN);
 

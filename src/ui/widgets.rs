@@ -511,7 +511,8 @@ pub(super) fn num_field(ui: &mut Ui, r: Rect, id: Id, v: &mut f64, lo: f64, hi: 
     } else {
         ui.data_mut(|d| d.remove::<String>(id));
     }
-    if hov || resp.hovered() {
+    // la molette ne modifie que le champ ayant le focus : sinon le défilement du parent reste intact
+    if resp.has_focus() {
         let dy = ui.input_mut(|i| {
             let d = i.raw_scroll_delta.y;
             if d != 0.0 {
@@ -525,7 +526,7 @@ pub(super) fn num_field(ui: &mut Ui, r: Rect, id: Id, v: &mut f64, lo: f64, hi: 
             if nv != *v {
                 *v = if int { nv.round() } else { nv };
                 changed = true;
-                ui.memory_mut(|m| m.surrender_focus(id));
+                ui.data_mut(|d| d.insert_temp(id, fmt(*v)));
             }
         }
     }
@@ -564,7 +565,7 @@ pub(super) fn start_button(ui: &mut Ui, r: Rect, id: Id, running: bool, hint: &s
     resp.clicked()
 }
 
-pub(super) fn rhythm(p: &Painter, r: Rect, iv: f64) {
+pub(super) fn rhythm(p: &Painter, r: Rect, iv: f64, lang: Lang) {
     let win = if iv <= 1.0 {
         1.0
     } else if iv <= 60.0 {
@@ -572,19 +573,12 @@ pub(super) fn rhythm(p: &Painter, r: Rect, iv: f64) {
     } else {
         3600.0
     };
-    let unit = if win == 1.0 {
-        "1 s"
-    } else if win == 60.0 {
-        "1 min"
-    } else {
-        "1 h"
-    };
+    let unit = fmt_duration(lang, win);
     let track = Rect::from_min_size(r.min + vec2(0.0, 4.0), vec2(r.width(), 20.0));
     p.rect_filled(track, 8.0, SURFACE2);
     let n = (win / iv.max(0.001)) as usize;
     if n > 80 {
         let inner = track.shrink(3.0);
-        grad_rect(p, inner, 6.0, VIOLET, CYAN, false);
         // dégradé horizontal : on recolore à la main
         let mut mesh = epaint::Mesh::default();
         let mut tess = epaint::Tessellator::new(p.ctx().pixels_per_point(), Default::default(), [1, 1], vec![]);
@@ -605,6 +599,6 @@ pub(super) fn rhythm(p: &Painter, r: Rect, iv: f64) {
             p.rect_filled(Rect::from_center_size(pos2(x, track.center().y), vec2(3.0, 12.0)), 1.5, c);
         }
     }
-    text(p, pos2(r.min.x + 2.0, track.max.y + 10.0), Align2::LEFT_CENTER, "0", 11.0, W::R, MUTED);
-    text(p, pos2(r.max.x - 2.0, track.max.y + 10.0), Align2::RIGHT_CENTER, unit, 11.0, W::R, MUTED);
+    text(p, pos2(r.min.x + 2.0, track.max.y + 10.0), Align2::LEFT_CENTER, &fmt_num(lang, 0.0), 11.0, W::R, MUTED);
+    text(p, pos2(r.max.x - 2.0, track.max.y + 10.0), Align2::RIGHT_CENTER, &unit, 11.0, W::R, MUTED);
 }

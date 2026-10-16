@@ -252,6 +252,8 @@ fn config_path() -> PathBuf {
 
 pub const MAX_FILE: u64 = 1024 * 1024;
 pub const MAX_STEPS: usize = 500;
+/// Touches max. d'un raccourci (combo)
+pub const MAX_COMBO: usize = 6;
 /// Intervalle minimum du spam (10 ms)
 pub const MIN_INTERVAL_S: f64 = 0.010;
 
@@ -261,7 +263,33 @@ pub fn read_small(p: &std::path::Path) -> Option<String> {
     if !meta.is_file() || meta.len() > MAX_FILE {
         return None;
     }
-    std::fs::read_to_string(p).ok()
+    std::fs::read_to_string(p).ok().map(|t| strip_bom(&t).to_string())
+}
+
+/// Retire le BOM UTF-8 en tête (éditeurs Windows) : serde_json le refuse
+pub fn strip_bom(t: &str) -> &str {
+    t.strip_prefix('\u{feff}').unwrap_or(t)
+}
+
+/// Longueur max. du nom d'une touche (affichage de repli)
+pub const MAX_KEY_NAME: usize = 32;
+
+/// Touche valide : `vk` tient dans un octet (les tables `INJ`/`FAKE` de `platform` sont indexées par `vk & 0xFF`)
+fn key_ok(k: &KeySpec) -> bool {
+    k.vk <= 0xFF
+}
+
+/// Nom tronqué à `MAX_KEY_NAME` caractères (frontière de char)
+fn clean_key(k: &mut KeySpec) {
+    if k.name.chars().count() > MAX_KEY_NAME {
+        k.name = k.name.chars().take(MAX_KEY_NAME).collect();
+    }
+}
+
+/// Combo : touches invalides retirées (un combo tronqué reste utilisable), noms bornés
+fn clean_combo(c: &mut Vec<KeySpec>) {
+    c.retain(key_ok);
+    c.iter_mut().for_each(clean_key);
 }
 
 fn clamp_f(v: f64, lo: f64, hi: f64, def: f64) -> f64 {
@@ -275,7 +303,18 @@ fn clamp_f(v: f64, lo: f64, hi: f64, def: f64) -> f64 {
 /// Ramène toutes les valeurs dans des bornes sûres (fichier modifié à la main, corrompu…)
 pub fn sanitize_pattern(p: &mut PatternCfg) {
     p.steps.truncate(MAX_STEPS);
-    p.hotkey.truncate(6);
+    // une étape dont la touche est invalide est supprimée (aucune valeur de repli cohérente)
+    p.steps.retain(|st| match st {
+        Step::Hold { key, .. } | Step::Press { key, .. } => key_ok(key),
+        Step::Wait { .. } => true,
+    });
+    for st in &mut p.steps {
+        if let Some(k) = st.key_mut() {
+            clean_key(k);
+        }
+    }
+    clean_combo(&mut p.hotkey);
+    p.hotkey.truncate(MAX_COMBO);
     p.loops = p.loops.min(999_999);
     for st in &mut p.steps {
         match st {
@@ -298,7 +337,13 @@ pub fn sanitize_spam(sp: &mut SpamCfg) {
         SpamLimit::Count(n) => SpamLimit::Count(n.clamp(1, MAX_LIMIT_COUNT)),
         SpamLimit::Duration(d) => SpamLimit::Duration(clamp_f(d, MIN_LIMIT_S, MAX_LIMIT_S, 60.0)),
     };
-    sp.hotkey.truncate(6);
+    // touche d'action invalide : retour à la touche par défaut
+    if !key_ok(&sp.key) {
+        sp.key = SpamCfg::default().key;
+    }
+    clean_key(&mut sp.key);
+    clean_combo(&mut sp.hotkey);
+    sp.hotkey.truncate(MAX_COMBO);
 }
 
 /// Nom de profil : espaces rognés, ≤ 32 caractères (pas octets) ; vide → `fallback`
@@ -327,12 +372,13 @@ fn sanitize_profiles(s: &mut Settings) {
 pub const MAX_WINDOW_POS: i32 = 100_000;
 
 pub fn sanitize(s: &mut Settings) {
-    if s.window_pos.is_some_and(|(x, y)| x.abs() > MAX_WINDOW_POS || y.abs() > MAX_WINDOW_POS) {
+    if s.window_pos.is_some_and(|(x, y)| x.unsigned_abs() > MAX_WINDOW_POS as u32 || y.unsigned_abs() > MAX_WINDOW_POS as u32) {
         s.window_pos = None;
     }
     sanitize_spam(&mut s.spam);
     s.jitter_pct = clamp_f(s.jitter_pct, 0.0, MAX_JITTER_PCT, 0.0);
-    s.stop_hotkey.truncate(6);
+    clean_combo(&mut s.stop_hotkey);
+    s.stop_hotkey.truncate(MAX_COMBO);
     s.press_ms = clamp_f(s.press_ms, 0.0, MAX_PRESS_MS, DEFAULT_PRESS_MS);
     sanitize_pattern(&mut s.pattern);
     sanitize_profiles(s);
@@ -376,8 +422,8 @@ pub fn read_pattern_file(p: &std::path::Path) -> Option<PatternFile> {
     Some(f)
 }
 
-pub fn save(s: &Settings) {
-    let _ = save_to(&config_path(), s);
+pub fn save(s: &Settings) -> std::io::Result<()> {
+    save_to(&config_path(), s)
 }
 
 /// Écriture atomique : fichier temporaire voisin puis renommage
@@ -387,8 +433,18 @@ fn save_to(p: &Path, s: &Settings) -> std::io::Result<()> {
     }
     let txt = serde_json::to_string_pretty(s).map_err(std::io::Error::other)?;
     let tmp = p.with_file_name("config3.json.tmp");
-    std::fs::write(&tmp, txt)?;
-    std::fs::rename(&tmp, p)
+    let res = (|| {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(txt.as_bytes())?;
+        f.sync_all()?; // données sur disque avant le renommage (coupure de courant)
+        drop(f);
+        std::fs::rename(&tmp, p)
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
 }
 
 #[derive(Serialize, Deserialize)]
@@ -651,6 +707,52 @@ mod tests {
         s.pin = false;
         save_to(&p, &s).unwrap();
         assert_eq!(load_from(&p), s);
+    }
+
+    #[test]
+    fn bom_is_ignored() {
+        let t = Tmp::new();
+        std::fs::write(t.file(), "\u{feff}{\"pin\":true}").unwrap();
+        assert!(load_from(&t.file()).pin);
+        assert!(!t.0.join("config3.bad.json").exists());
+        let pf = t.0.join("p.json");
+        std::fs::write(&pf, format!("\u{feff}{}", serde_json::to_string(&PatternFile { autokey: 1, pattern: PatternCfg::default() }).unwrap())).unwrap();
+        assert!(read_pattern_file(&pf).is_some());
+    }
+
+    #[test]
+    fn save_failure_leaves_no_tmp() {
+        let t = Tmp::new();
+        // la cible est un dossier : le renommage échoue
+        let p = t.0.join("config3.json");
+        std::fs::create_dir(&p).unwrap();
+        assert!(save_to(&p, &Settings::default()).is_err());
+        assert!(!t.0.join("config3.json.tmp").exists());
+    }
+
+    #[test]
+    fn sanitize_key_names_and_vk() {
+        let long = KeySpec { vk: 0x41, name: "é".repeat(50), ..Default::default() };
+        let bad = KeySpec::vk(0x1234);
+        let mut s = Settings::default();
+        s.spam.key = bad.clone();
+        s.spam.hotkey = vec![long.clone(), bad.clone()];
+        s.stop_hotkey = vec![bad.clone(), KeySpec::vk(0x78)];
+        s.pattern.steps = vec![
+            Step::Hold { key: bad.clone(), value: 1.0, unit: Unit::S },
+            Step::Press { key: long.clone(), count: 1, gap: 1.0 },
+            Step::Wait { value: 1.0, unit: Unit::S },
+        ];
+        s.profiles.push(Profile { name: "a".into(), spam: SpamCfg { key: long, ..Default::default() }, pattern: PatternCfg::default() });
+        s.window_pos = Some((i32::MIN, 0));
+        sanitize(&mut s);
+        assert_eq!(s.spam.key, SpamCfg::default().key);
+        assert_eq!(s.spam.hotkey.len(), 1);
+        assert_eq!(s.spam.hotkey[0].name.chars().count(), MAX_KEY_NAME);
+        assert_eq!(s.stop_hotkey, vec![KeySpec::vk(0x78)]);
+        assert_eq!(s.pattern.steps.len(), 2);
+        assert_eq!(s.profiles[0].spam.key.name.chars().count(), MAX_KEY_NAME);
+        assert_eq!(s.window_pos, None);
     }
 
     #[test]

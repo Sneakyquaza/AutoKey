@@ -312,7 +312,7 @@ impl App {
                 mini_btn(ui, br, Id::new(tag).with(i), ic, tip, true, danger)
             };
             if btn(Ic::Trash, "prof_del", tr(lang, "prof_delete"), true) {
-                self.confirm_profile = Some(i);
+                self.confirm = Some(Confirm::Profile(i));
             }
             if btn(Ic::Edit, "prof_ren", tr(lang, "prof_rename"), false) {
                 self.prof_rename = Some((i, s.profiles[i].name.clone()));
@@ -322,7 +322,7 @@ impl App {
             }
         }
         let btn_hover = ui.ctx().read_response(Id::new("profbtn")).map(|r| r.hovered()).unwrap_or(false);
-        if ui.input(|i| i.pointer.any_pressed()) && !inside && !btn_hover && self.confirm_profile.is_none() {
+        if ui.input(|i| i.pointer.any_pressed()) && !inside && !btn_hover && !matches!(self.confirm, Some(Confirm::Profile(_))) {
             self.profiles_open = false;
             self.prof_rename = None;
         }
@@ -330,21 +330,33 @@ impl App {
 
     pub(super) fn confirm_modal(&mut self, ui: &mut Ui, full: Rect, s: &mut Settings, acts: &mut Vec<Act>) {
         let lang = s.lang;
+        // profil d'index périmé (liste modifiée entre-temps) : annulation sans effet
+        if matches!(self.confirm, Some(Confirm::Profile(i)) if i >= s.profiles.len()) {
+            self.confirm = None;
+            return;
+        }
+        let Some(conf) = self.confirm.as_ref() else { return };
         let p = ui.painter().clone();
         p.rect_filled(full, 0.0, Color32::from_black_alpha(150));
         ui.interact(full, Id::new("modal_block"), Sense::click());
         let r = Rect::from_center_size(full.center(), vec2(380.0, 160.0));
         p.rect(r, 18.0, SURFACE, sk(1.0, LINE2));
-        icon(&p, if self.confirm_reset { Ic::Gear } else { Ic::Trash }, pos2(r.center().x, r.min.y + 36.0), 28.0, ROSE);
-        let msg = match self.confirm_profile.and_then(|i| s.profiles.get(i)) {
-            _ if self.confirm_reset => tr(lang, "reset_q").to_string(),
-            _ if self.confirm_macro.is_some() => tr(lang, "macro_replace_q").to_string(),
-            Some(pf) => fit_text(&p, &trf(lang, "prof_del_q", &[("name", pf.name.clone())]), 15.0, W::S, r.width() - 32.0),
-            None => tr(lang, "clear_q").to_string(),
+        let (ic, msg, note, yes) = match conf {
+            Confirm::Reset => (Ic::Gear, tr(lang, "reset_q").to_string(), Some("reset_note"), "reset_yes"),
+            Confirm::Macro(_) => (Ic::Trash, tr(lang, "macro_replace_q").to_string(), None, "yes"),
+            Confirm::Example => (Ic::Trash, tr(lang, "macro_replace_q").to_string(), None, "replace_yes"),
+            Confirm::Profile(i) => {
+                let name = s.profiles[*i].name.clone();
+                (Ic::Trash, fit_text(&p, &trf(lang, "prof_del_q", &[("name", name)]), 15.0, W::S, r.width() - 32.0), None, "yes")
+            }
+            Confirm::Clear => (Ic::Trash, tr(lang, "clear_q").to_string(), None, "yes"),
+            Confirm::ImportConfig(_) | Confirm::ImportPreset(_) => (Ic::Gear, tr(lang, "import_q").to_string(), Some("import_warn"), "import_yes"),
         };
-        if self.confirm_reset {
+        icon(&p, ic, pos2(r.center().x, r.min.y + 36.0), 28.0, ROSE);
+        if let Some(n) = note {
             text(&p, pos2(r.center().x, r.min.y + 70.0), Align2::CENTER_CENTER, &msg, 15.0, W::S, TEXT);
-            text(&p, pos2(r.center().x, r.min.y + 92.0), Align2::CENTER_CENTER, tr(lang, "reset_note"), 12.0, W::R, MUTED);
+            let n = fit_text(&p, tr(lang, n), 12.0, W::R, r.width() - 32.0);
+            text(&p, pos2(r.center().x, r.min.y + 92.0), Align2::CENTER_CENTER, &n, 12.0, W::R, MUTED);
         } else {
             text(&p, pos2(r.center().x, r.min.y + 78.0), Align2::CENTER_CENTER, &msg, 15.0, W::S, TEXT);
         }
@@ -357,28 +369,29 @@ impl App {
         p.rect(cancel, 10.0, SURFACE2, sk(1.0, if rc.hovered() { VIOLET } else { LINE2 }));
         text(&p, cancel.center(), Align2::CENTER_CENTER, tr(lang, "cancel"), 13.0, W::S, TEXT);
         p.rect_filled(del, 10.0, if rd.hovered() { lighten(ROSE, 0.12) } else { ROSE });
-        text(&p, del.center(), Align2::CENTER_CENTER, tr(lang, if self.confirm_reset { "reset_yes" } else { "yes" }), 13.0, W::S, Color32::WHITE);
+        text(&p, del.center(), Align2::CENTER_CENTER, tr(lang, yes), 13.0, W::S, Color32::WHITE);
         if rc.clicked() {
-            self.confirm_clear = false;
-            self.confirm_reset = false;
-            self.confirm_profile = None;
-            self.confirm_macro = None;
-        }
-        if rd.clicked() {
-            match self.confirm_profile.take() {
-                _ if self.confirm_reset => acts.push(Act::ResetSettings),
-                Some(i) => acts.push(Act::ProfileDelete(i)),
-                None if self.confirm_macro.is_some() => {
-                    s.pattern.steps = self.confirm_macro.take().unwrap_or_default();
+            self.confirm = None;
+        } else if rd.clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            match self.confirm.take() {
+                Some(Confirm::Reset) => acts.push(Act::ResetSettings),
+                Some(Confirm::Profile(i)) => acts.push(Act::ProfileDelete(i)),
+                Some(Confirm::Macro(steps)) => {
+                    s.pattern.steps = steps;
                     acts.push(Act::StepsChanged);
                 }
-                None => {
+                Some(Confirm::Example) => {
+                    s.pattern.steps = config::example_steps();
+                    acts.push(Act::StepsChanged);
+                }
+                Some(Confirm::Clear) => {
                     s.pattern.steps.clear();
                     acts.push(Act::StepsChanged);
                 }
+                Some(Confirm::ImportConfig(new)) => acts.push(Act::ApplyImport(new)),
+                Some(Confirm::ImportPreset(pat)) => acts.push(Act::ApplyPreset(pat)),
+                None => {}
             }
-            self.confirm_clear = false;
-            self.confirm_reset = false;
         }
     }
 
@@ -402,8 +415,10 @@ impl App {
         let w = 400.0;
         let tw = w - 36.0 - 14.0;
         let galleys: Vec<_> = lines.iter().map(|t| p.layout(t.to_string(), font(13.0, W::R), TEXT, tw)).collect();
-        let notes_h: f32 = if galleys.is_empty() { 0.0 } else { 30.0 + galleys.iter().map(|g| g.size().y + 6.0).sum::<f32>() };
-        let h = 168.0 + notes_h;
+        // en-tête jusqu'aux notes (144) + marge et boutons (8 + 36 + 22) = 210 ; sans notes : 168
+        let notes_h: f32 = if galleys.is_empty() { 0.0 } else { 42.0 + galleys.iter().map(|g| g.size().y + 6.0).sum::<f32>() };
+        // hauteur plafonnée à la fenêtre : au-delà, les notes défilent et les boutons restent visibles
+        let h = (168.0 + notes_h).min(full.height() - 24.0);
         let r = Rect::from_center_size(full.center(), vec2(w, h));
         p.rect(r, 18.0, SURFACE, sk(1.0, LINE2));
         icon(&p, Ic::Save, pos2(r.center().x, r.min.y + 36.0), 28.0, CYAN);
@@ -411,22 +426,36 @@ impl App {
         let cur = env!("CARGO_PKG_VERSION");
         let ver = match &version {
             Some(v) => format!("v{cur} → v{v}"),
-            None => format!("build {} → build {build}", crate::update::current_build()),
+            None => format!(
+                "{} → {}",
+                trf(lang, "build_n", &[("n", crate::update::current_build().to_string())]),
+                trf(lang, "build_n", &[("n", build.to_string())])
+            ),
         };
         text(&p, pos2(r.center().x, r.min.y + 98.0), Align2::CENTER_CENTER, &ver, 13.0, W::R, MUTED);
+        let bw = 170.0;
+        let by = r.max.y - 22.0 - 36.0;
         if !galleys.is_empty() {
-            let mut y = r.min.y + 120.0;
-            spaced_text(&p, pos2(r.min.x + 18.0, y), tr(lang, "upd_news"), 11.0, MUTED);
-            y += 24.0;
+            spaced_text(&p, pos2(r.min.x + 18.0, r.min.y + 120.0), tr(lang, "upd_news"), 11.0, MUTED);
+            let area = Rect::from_min_max(pos2(r.min.x + 1.0, r.min.y + 144.0), pos2(r.max.x - 1.0, by - 8.0));
+            let content_h: f32 = galleys.iter().map(|g| g.size().y + 6.0).sum();
+            let max_off = (content_h - area.height()).max(0.0);
+            let sid = Id::new("upd_scroll");
+            let mut off: f32 = ui.data(|d| d.get_temp(sid)).unwrap_or(0.0);
+            if max_off > 0.0 && ui.rect_contains_pointer(area) {
+                off -= ui.input_mut(|i| std::mem::take(&mut i.smooth_scroll_delta.y) + std::mem::take(&mut i.raw_scroll_delta.y));
+            }
+            off = off.clamp(0.0, max_off);
+            ui.data_mut(|d| d.insert_temp(sid, off));
+            let pc = p.with_clip_rect(area);
+            let mut y = area.min.y - off;
             for g in galleys {
                 let gh = g.size().y;
-                p.circle_filled(pos2(r.min.x + 24.0, y + 8.0), 2.5, VIOLET);
-                p.galley(pos2(r.min.x + 36.0, y), g, TEXT);
+                pc.circle_filled(pos2(r.min.x + 24.0, y + 8.0), 2.5, VIOLET);
+                pc.galley(pos2(r.min.x + 36.0, y), g, TEXT);
                 y += gh + 6.0;
             }
         }
-        let bw = 170.0;
-        let by = r.max.y - 22.0 - 36.0;
         let later = Rect::from_min_size(pos2(r.center().x - bw - 6.0, by), vec2(bw, 36.0));
         let upd = Rect::from_min_size(pos2(r.center().x + 6.0, by), vec2(bw, 36.0));
         let rl = hand(ui.interact(later, Id::new("u_later"), Sense::click()));
@@ -465,7 +494,7 @@ impl App {
         let elapsed = match *st.started.lock().unwrap() {
             Some(t) if running => {
                 let e = t.elapsed().as_secs();
-                format!(" · {}", if e == 0 { "0 s".to_string() } else { fmt_duration(lang, e as f64) })
+                format!(" · {}", fmt_duration(lang, e as f64))
             }
             _ => String::new(),
         };
@@ -487,6 +516,9 @@ impl App {
                     ],
                 );
                 msg += &elapsed;
+            } else {
+                // tâche lancée, première étape pas encore atteinte
+                msg = tr(lang, "starting").to_string();
             }
         }
         if running && st.waiting.load(SeqCst) {
@@ -518,10 +550,6 @@ impl App {
             crate::update::UpState::Restarting => {
                 msg = tr(lang, "up_restart").to_string();
                 col = GREEN;
-            }
-            crate::update::UpState::Failed(k) => {
-                msg = tr(lang, k).to_string();
-                col = AMBER;
             }
             _ => {}
         }

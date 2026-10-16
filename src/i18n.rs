@@ -63,6 +63,23 @@ static T: &[(&str, [&str; 3])] = &[
     ("rate_s", ["≈ {n} pressions / seconde", "≈ {n} presses / second", "≈ {n} toques / segundo"]),
     ("rate_m", ["≈ {n} pressions / minute", "≈ {n} presses / minute", "≈ {n} toques / minuto"]),
     ("rate_h", ["≈ {n} pressions / heure", "≈ {n} presses / hour", "≈ {n} toques / hora"]),
+    ("starting", ["Démarrage…", "Starting…", "Iniciando…"]),
+    ("rate_d", ["≈ {n} pressions / jour", "≈ {n} presses / day", "≈ {n} toques / dia"]),
+    ("rate_lt", ["< 0,1 pression / jour", "< 0.1 press / day", "< 0,1 toque / dia"]),
+    ("gap_ms", ["écart (ms)", "gap (ms)", "intervalo (ms)"]),
+    ("build_n", ["build {n}", "build {n}", "build {n}"]),
+    ("steps_max", ["Limite de 500 étapes atteinte", "Limit of 500 steps reached", "Limite de 500 etapas atingido"]),
+    ("replace_yes", ["Remplacer", "Replace", "Substituir"]),
+    ("import_q", ["Importer ce fichier ?", "Import this file?", "Importar este arquivo?"]),
+    (
+        "import_warn",
+        [
+            "Il contient des touches sensibles (Windows, Ctrl+Alt).",
+            "It contains sensitive keys (Windows, Ctrl+Alt).",
+            "Contém teclas sensíveis (Windows, Ctrl+Alt).",
+        ],
+    ),
+    ("import_yes", ["Importer", "Import", "Importar"]),
     ("k_hold", ["Maintenir", "Hold", "Segurar"]),
     ("k_press", ["Appuyer", "Press", "Pressionar"]),
     ("k_wait", ["Attendre", "Wait", "Esperar"]),
@@ -167,6 +184,7 @@ static T: &[(&str, [&str; 3])] = &[
     ("del", ["Supprimer", "Delete", "Excluir"]),
     ("clear_q", ["Supprimer toutes les étapes ?", "Delete all steps?", "Excluir todas as etapas?"]),
     ("yes", ["Supprimer", "Delete", "Excluir"]),
+    ("already_running", ["AutoKey est déjà en cours d'exécution.", "AutoKey is already running.", "O AutoKey já está em execução."]),
     ("cancel", ["Annuler", "Cancel", "Cancelar"]),
     (
         "bg_hint",
@@ -291,7 +309,9 @@ pub fn trf(lang: Lang, key: &str, args: &[(&str, String)]) -> String {
 }
 
 pub fn fmt_num(lang: Lang, v: f64) -> String {
-    let mut s = format!("{v:.3}");
+    // les petites valeurs gardent des décimales significatives (jamais « 0 » pour un nombre non nul)
+    let dec = if v != 0.0 && v.abs() < 1.0 { (2 - v.abs().log10().floor() as i32).clamp(3, 9) as usize } else { 3 };
+    let mut s = format!("{v:.dec$}");
     if s.contains('.') {
         s = s.trim_end_matches('0').trim_end_matches('.').to_string();
     }
@@ -302,17 +322,30 @@ pub fn fmt_num(lang: Lang, v: f64) -> String {
 }
 
 pub fn fmt_duration(lang: Lang, sec: f64) -> String {
-    if sec < 1.0 {
-        format!("{} ms", fmt_num(lang, (sec * 1000.0).round()))
-    } else if sec < 60.0 {
+    let ms = (sec * 1000.0).round();
+    if sec <= 0.0 {
+        "0 s".to_string()
+    } else if ms < 1000.0 {
+        format!("{} ms", fmt_num(lang, ms))
+    } else if (sec * 100.0).round() < 6000.0 {
         format!("{} s", fmt_num(lang, (sec * 100.0).round() / 100.0))
-    } else {
-        let m = (sec / 60.0).floor();
-        let s = sec - m * 60.0;
-        if s >= 0.05 {
-            format!("{} min {} s", m as u64, fmt_num(lang, (s * 10.0).round() / 10.0))
+    } else if (sec * 10.0).round() >= 36000.0 {
+        // au-delà d'une heure : minutes entières
+        let total = (sec / 60.0).round() as u64;
+        let (h, m) = (total / 60, total % 60);
+        if m == 0 {
+            format!("{h} h")
         } else {
-            format!("{} min", m as u64)
+            format!("{h} h {m} min")
+        }
+    } else {
+        // arrondi au dixième de seconde avant de découper (jamais « 1 min 60 s »)
+        let t = (sec * 10.0).round() as u64;
+        let (m, s) = (t / 600, (t % 600) as f64 / 10.0);
+        if s == 0.0 {
+            format!("{m} min")
+        } else {
+            format!("{m} min {} s", fmt_num(lang, s))
         }
     }
 }
@@ -320,6 +353,28 @@ pub fn fmt_duration(lang: Lang, sec: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duration_and_number_formats() {
+        let f = |s: f64| fmt_duration(Lang::En, s);
+        assert_eq!(f(0.0), "0 s");
+        assert_eq!(f(0.25), "250 ms");
+        assert_eq!(f(0.9999), "1 s");
+        assert_eq!(f(59.5), "59.5 s");
+        assert_eq!(f(59.996), "1 min");
+        assert_eq!(f(59.97), "59.97 s");
+        assert_eq!(f(90.0), "1 min 30 s");
+        assert_eq!(f(119.96), "2 min");
+        assert_eq!(f(3599.97), "1 h");
+        assert_eq!(f(3600.0), "1 h");
+        assert_eq!(f(7500.0), "2 h 5 min");
+        assert_eq!(f(10829.0), "3 h");
+        assert_eq!(fmt_num(Lang::En, 0.000167), "0.000167");
+        assert_eq!(fmt_num(Lang::Fr, 0.0005), "0,0005");
+        assert_eq!(fmt_num(Lang::En, 0.5), "0.5");
+        assert_eq!(fmt_num(Lang::En, 12.3456), "12.346");
+        assert_eq!(fmt_num(Lang::En, 0.0), "0");
+    }
 
     #[test]
     fn keys_unique_and_translations_non_empty() {

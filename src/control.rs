@@ -78,8 +78,10 @@ impl Shared {
 
     pub fn save_now(&self) {
         let s = self.settings.lock().unwrap().clone();
-        config::save(&s);
-        self.dirty.store(false, SeqCst);
+        // en cas d'échec, `dirty` reste levé : nouvelle tentative au prochain cycle
+        if config::save(&s).is_ok() {
+            self.dirty.store(false, SeqCst);
+        }
     }
 
     // ---------------------------------------------------------------- run
@@ -161,6 +163,8 @@ impl Shared {
             *self.macro_rec.lock().unwrap() = None;
             *r = Some(Recording { target: t, keys: vec![], down: HashSet::new() });
         }
+        drop(r);
+        self.reset_keys();
     }
 
     // ---------------------------------------------------------------- capture de macro
@@ -191,6 +195,7 @@ impl Shared {
 
     pub fn cancel_macro(&self) {
         *self.macro_rec.lock().unwrap() = None;
+        self.reset_keys();
     }
 
     /// Reprend le résultat d'une capture terminée (non vide)
@@ -246,7 +251,7 @@ impl Shared {
         if ev.down && full && stop_keys.contains(&id) {
             drop(g);
             self.stop_macro(now);
-        } else if !hk_keys.contains(&id) && !stop_keys.contains(&id) {
+        } else if m.events.len() < macro_rec::MAX_EVENTS && !hk_keys.contains(&id) && !stop_keys.contains(&id) {
             // une touche de raccourci n'est jamais enregistrée : une étape la contenant violerait `conflicts`
             m.events.push((now, ev.key.clone(), ev.down));
             drop(g);
@@ -290,7 +295,7 @@ impl Shared {
         if txt.len() as u64 > config::MAX_FILE {
             return Err("bad_file");
         }
-        let mut s: Settings = serde_json::from_str(txt).map_err(|_| "bad_file")?;
+        let mut s: Settings = serde_json::from_str(config::strip_bom(txt)).map_err(|_| "bad_file")?;
         config::sanitize(&mut s);
         let hk = [(Target::SpamHotkey, &s.spam.hotkey), (Target::PatHotkey, &s.pattern.hotkey), (Target::StopHotkey, &s.stop_hotkey)];
         let hk_bad = hk.iter().any(|(t, k)| Self::conflicts(&s, *t, k));
@@ -310,6 +315,7 @@ impl Shared {
         self.runner.stop();
         self.cancel_record();
         self.cancel_macro();
+        self.reset_keys();
         *self.settings.lock().unwrap() = new;
         self.mark_dirty();
         self.repaint();
@@ -423,7 +429,8 @@ impl Shared {
         self.mark_dirty();
     }
 
-    fn commit(&self, t: Target, keys: Vec<KeySpec>) {
+    fn commit(&self, t: Target, mut keys: Vec<KeySpec>) {
+        keys.truncate(config::MAX_COMBO);
         {
             let mut s = self.settings.lock().unwrap();
             if Self::conflicts(&s, t, &keys) {
@@ -444,7 +451,7 @@ impl Shared {
                 }
             }
         }
-        *self.active.lock().unwrap() = [false; 3];
+        self.reset_keys();
         self.mark_dirty();
     }
 
@@ -463,7 +470,7 @@ impl Shared {
             let mut guard = self.rec.lock().unwrap();
             if let Some(rec) = guard.as_mut() {
                 if ev.down {
-                    if !rec.keys.iter().any(|k| k.vk == id) {
+                    if rec.keys.len() < config::MAX_COMBO && !rec.keys.iter().any(|k| k.vk == id) {
                         rec.keys.push(ev.key.clone());
                     }
                     rec.down.insert(id);
@@ -627,6 +634,7 @@ mod tests {
         assert_eq!(Shared::parse_import("pas du json"), Err("bad_file"));
         assert_eq!(Shared::parse_import(r#"{"press_ms":"x"}"#), Err("bad_file"));
         assert_eq!(Shared::parse_import(""), Err("bad_file"));
+        assert!(Shared::parse_import("\u{feff}{\"pin\":true}").unwrap().pin);
         // valeurs absurdes : ramenées dans les bornes
         let s = Shared::parse_import(r#"{"press_ms":1e12,"jitter_pct":-5,"stop_hotkey":[]}"#).unwrap();
         assert!(s.press_ms <= config::MAX_PRESS_MS && s.jitter_pct >= 0.0);
@@ -679,6 +687,7 @@ mod tests {
         sh.handle(ev(0x59, false));
         sh.handle(ev(0xA2, false));
         assert!(sh.is_running(Mode::Spam), "reste actif en bascule");
+        std::thread::sleep(std::time::Duration::from_millis(50)); // laisse partir une frappe avant l'arrêt
         sh.handle(ev(0xA2, true));
         sh.handle(ev(0x59, true));
         assert!(!sh.is_running(Mode::Spam));
@@ -693,6 +702,31 @@ mod tests {
         assert!(sh.is_running(Mode::Spam));
         sh.handle(ev(0x59, false));
         assert!(!sh.is_running(Mode::Spam));
+    }
+
+    #[test]
+    fn record_combo_capped_at_six() {
+        let (sh, _) = setup();
+        sh.begin_record(Target::SpamHotkey);
+        for vk in 0x31..0x3C {
+            sh.handle(ev(vk, true));
+        }
+        for vk in 0x31..0x3C {
+            sh.handle(ev(vk, false));
+        }
+        assert_eq!(sh.settings.lock().unwrap().spam.hotkey.len(), config::MAX_COMBO);
+    }
+
+    #[test]
+    fn begin_record_clears_stale_pressed() {
+        let (sh, _) = setup();
+        sh.settings.lock().unwrap().spam.hotkey = vec![KeySpec::vk(0xA2), KeySpec::vk(0x78)];
+        sh.handle(ev(0xA2, true)); // Ctrl tenu
+        sh.begin_record(Target::PatHotkey);
+        sh.cancel_record();
+        // relâchement de Ctrl avalé pendant l'enregistrement
+        sh.handle(ev(0x78, true));
+        assert!(!sh.is_running(Mode::Spam), "F9 seule ne doit pas déclencher");
     }
 
     #[test]

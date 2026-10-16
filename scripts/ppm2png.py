@@ -10,8 +10,9 @@ def chunk(tag, data):
 
 def convert(src):
     raw = open(src, "rb").read()
-    _, w, h, _, px = raw.split(maxsplit=4)
-    w, h = int(w), int(h)
+    # en-tête P6 sur 3 lignes ; pas de split() global : les premiers pixels peuvent valoir des espaces (\t, \v…)
+    _, size, _, px = raw.split(b"\n", 3)
+    w, h = map(int, size.split())
     rows = b"".join(b"\x00" + px[y * w * 3:(y + 1) * w * 3] for y in range(h))
     png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
     png += chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b"")

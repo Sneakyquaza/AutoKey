@@ -23,6 +23,32 @@ pub use theme::{height_for, setup_fonts, width_for, BG};
 use widgets::*;
 
 // ------------------------------------------------------------------ application
+/// Touche Windows (gauche / droite)
+fn is_win(k: &crate::keys::KeySpec) -> bool {
+    matches!(k.vk, 0x5B | 0x5C)
+}
+
+/// Étape qui utilise une touche Windows
+fn sensitive_steps(steps: &[Step]) -> bool {
+    steps.iter().any(|st| matches!(st, Step::Hold { key, .. } | Step::Press { key, .. } if is_win(key)))
+}
+
+/// Raccourci contenant Win, ou combinaison Ctrl + Alt
+fn sensitive_combo(keys: &[crate::keys::KeySpec]) -> bool {
+    let has = |vks: &[u16]| keys.iter().any(|k| vks.contains(&k.vk));
+    keys.iter().any(is_win) || (has(&[0x11, 0xA2, 0xA3]) && has(&[0x12, 0xA4, 0xA5]))
+}
+
+/// Réglages importés à confirmer : touche Win ou Ctrl+Alt dans un raccourci, Win dans le spam ou le pattern
+fn sensitive_settings(s: &Settings) -> bool {
+    sensitive_combo(&s.spam.hotkey)
+        || sensitive_combo(&s.pattern.hotkey)
+        || sensitive_combo(&s.stop_hotkey)
+        || is_win(&s.spam.key)
+        || sensitive_steps(&s.pattern.steps)
+        || s.profiles.iter().any(|p| is_win(&p.spam.key) || sensitive_steps(&p.pattern.steps))
+}
+
 enum Act {
     Record(Target),
     MacroToggle,
@@ -48,6 +74,25 @@ enum Act {
     ResetSettings,
     Autostart(bool),
     CheckUpdates,
+    /// Import de configuration confirmé
+    ApplyImport(Box<Settings>),
+    /// Pattern importé confirmé
+    ApplyPreset(config::PatternCfg),
+}
+
+/// Action destructive ou sensible en attente d'un « Oui »
+enum Confirm {
+    Clear,
+    Reset,
+    /// Remplacer le pattern par l'exemple
+    Example,
+    Profile(usize),
+    /// Macro capturée à la place du pattern actuel
+    Macro(Vec<Step>),
+    /// Configuration importée contenant des touches sensibles
+    ImportConfig(Box<Settings>),
+    /// Pattern importé contenant des touches sensibles
+    ImportPreset(config::PatternCfg),
 }
 
 pub struct App {
@@ -55,20 +100,19 @@ pub struct App {
     up: Arc<crate::update::Updater>,
     lang_open: bool,
     settings_open: bool,
-    confirm_clear: bool,
-    /// Réinitialisation des réglages en attente de confirmation
-    confirm_reset: bool,
+    /// Confirmation en attente (texte et action du « Oui » viennent de la même valeur)
+    confirm: Option<Confirm>,
     /// Décalage de défilement imposé au panneau Paramètres (captures)
     settings_scroll: Option<f32>,
-    /// Macro capturée en attente de confirmation de remplacement
-    confirm_macro: Option<Vec<Step>>,
     profiles_open: bool,
     /// Fenêtre de mise à jour (versions + nouveautés) ouverte
     update_dialog: bool,
     /// Profil en cours de renommage (index, saisie)
     prof_rename: Option<(usize, String)>,
-    /// Profil dont la suppression attend confirmation
-    confirm_profile: Option<usize>,
+    /// Dernier nombre de boucles fini (restauré en quittant le mode infini)
+    loops_prev: u32,
+    /// État du démarrage automatique : lu à l'ouverture des Réglages et après un changement (None = à relire)
+    autostart: Option<platform::AutoStart>,
     /// Premier profil visible dans la liste (défilement)
     prof_scroll: usize,
     last_active: i32,
@@ -85,14 +129,13 @@ impl App {
             up,
             lang_open: false,
             settings_open: false,
-            confirm_clear: false,
-            confirm_reset: false,
+            confirm: None,
             settings_scroll: None,
-            confirm_macro: None,
             profiles_open: false,
             update_dialog: false,
             prof_rename: None,
-            confirm_profile: None,
+            loops_prev: 1,
+            autostart: None,
             prof_scroll: 0,
             last_active: -1,
             frames: 0,
@@ -114,7 +157,7 @@ impl App {
 
     #[cfg(feature = "shots")]
     pub fn open_confirm_for_shots(&mut self, on: bool) {
-        self.confirm_clear = on;
+        self.confirm = on.then_some(Confirm::Clear);
     }
 
     #[cfg(feature = "shots")]
@@ -221,14 +264,17 @@ impl App {
                 if let Some(path) = picked {
                     // lecture bornée (≤ 1 Mo), analyse + bornes + conflits de raccourcis avant de remplacer quoi que ce soit
                     match config::read_small(&path).ok_or("bad_file").and_then(|t| Shared::parse_import(&t)) {
-                        Ok(new) => {
-                            self.apply_new_settings(ctx, new);
-                            self.flash("cfg_imported");
-                        }
+                        Ok(new) if sensitive_settings(&new) => self.confirm = Some(Confirm::ImportConfig(Box::new(new))),
+                        Ok(new) => self.apply(ctx, Act::ApplyImport(Box::new(new))),
                         Err(k) => self.flash(k),
                     }
                 }
             }
+            Act::ApplyImport(new) => {
+                self.apply_new_settings(ctx, *new);
+                self.flash("cfg_imported");
+            }
+            Act::ApplyPreset(pat) => self.set_pattern(pat),
             Act::ResetSettings => {
                 let new = config::reset_keep_profiles(&self.sh.settings.lock().unwrap());
                 self.apply_new_settings(ctx, new);
@@ -238,6 +284,7 @@ impl App {
                 if !platform::autostart_set(on) {
                     self.flash("autostart_err");
                 }
+                self.autostart = None;
             }
             Act::CheckUpdates => self.up.check_now(),
             Act::OpenPreset => {
@@ -260,12 +307,8 @@ impl App {
                         {
                             *self.sh.flash.lock().unwrap() = Some(("hk_conflict", Instant::now()))
                         }
-                        Some(f) => {
-                            self.sh.runner.stop();
-                            self.sh.cancel_record();
-                            self.sh.settings.lock().unwrap().pattern = f.pattern;
-                            self.sh.mark_dirty();
-                        }
+                        Some(f) if sensitive_steps(&f.pattern.steps) => self.confirm = Some(Confirm::ImportPreset(f.pattern)),
+                        Some(f) => self.set_pattern(f.pattern),
                         None => *self.sh.flash.lock().unwrap() = Some(("bad_file", Instant::now())),
                     }
                 }
@@ -275,8 +318,43 @@ impl App {
 }
 
 impl App {
+    /// Échap ferme, du plus haut au plus bas : confirmation (= Annuler), fenêtre de MAJ (= Plus tard), popups, Réglages.
+    /// Ignoré pendant une capture de touche (les touches y sont des données) ; un champ de saisie actif garde son Échap.
+    fn escape_close(&mut self, ctx: &egui::Context, capturing: bool) {
+        if capturing {
+            return;
+        }
+        let modal = self.confirm.is_some() || self.update_dialog;
+        if !modal && ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        if !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            return;
+        }
+        if self.confirm.is_some() {
+            self.confirm = None;
+        } else if self.update_dialog {
+            self.update_dialog = false;
+        } else if self.profiles_open {
+            self.profiles_open = false;
+            self.prof_rename = None;
+        } else if self.lang_open {
+            self.lang_open = false;
+        } else if self.settings_open {
+            self.settings_open = false;
+        }
+    }
+
     fn flash(&self, k: &'static str) {
         *self.sh.flash.lock().unwrap() = Some((k, Instant::now()));
+    }
+
+    /// Remplace le pattern (preset importé) : tâche et capture en cours arrêtées
+    fn set_pattern(&mut self, pattern: config::PatternCfg) {
+        self.sh.runner.stop();
+        self.sh.cancel_record();
+        self.sh.settings.lock().unwrap().pattern = pattern;
+        self.sh.mark_dirty();
     }
 
     /// Remplace tous les réglages (import, réinitialisation) et répercute pin / taille sur la fenêtre
@@ -305,15 +383,22 @@ impl App {
     pub fn update(&mut self, ctx: &egui::Context) {
         self.frames += 1;
         let rec = self.sh.recording();
-        // macro terminée (bouton ou raccourci d'arrêt) : remplacement direct ou après confirmation
-        if let Some(steps) = self.sh.take_macro_out() {
-            if self.sh.settings.lock().unwrap().pattern.steps.is_empty() {
-                self.sh.settings.lock().unwrap().pattern.steps = steps;
-                self.sh.mark_dirty();
-            } else {
-                self.confirm_macro = Some(steps);
+        // macro terminée (bouton ou raccourci d'arrêt) : remplacement direct ou après confirmation.
+        // Une confirmation déjà ouverte n'est jamais écrasée : la macro reste dans `Shared` jusqu'à sa résolution.
+        if self.confirm.is_none() {
+            if let Some(steps) = self.sh.take_macro_out() {
+                if self.sh.settings.lock().unwrap().pattern.steps.is_empty() {
+                    self.sh.settings.lock().unwrap().pattern.steps = steps;
+                    self.sh.mark_dirty();
+                } else {
+                    self.confirm = Some(Confirm::Macro(steps));
+                }
             }
         }
+        if !self.settings_open {
+            self.autostart = None;
+        }
+        self.escape_close(ctx, rec.is_some() || self.sh.macro_active());
         let macro_on = self.sh.macro_active();
         if macro_on {
             // compteur et pulsation du bouton
@@ -406,15 +491,7 @@ impl App {
         self.footer(ui, foot, s);
         ui.painter().rect_stroke(full.shrink(0.5), 0.0, sk(1.0, LINE));
 
-        if self.lang_open
-            || self.settings_open
-            || self.profiles_open
-            || self.confirm_clear
-            || self.confirm_reset
-            || self.confirm_profile.is_some()
-            || self.confirm_macro.is_some()
-            || self.update_dialog
-        {
+        if self.lang_open || self.settings_open || self.profiles_open || self.confirm.is_some() || self.update_dialog {
             let ctx = ui.ctx().clone();
             egui::Area::new(Id::new("overlay")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
                 ui.set_min_size(full.size());
@@ -427,7 +504,7 @@ impl App {
                 if self.profiles_open {
                     self.profiles_popup(ui, full, s, acts);
                 }
-                if self.confirm_clear || self.confirm_reset || self.confirm_profile.is_some() || self.confirm_macro.is_some() {
+                if self.confirm.is_some() {
                     self.confirm_modal(ui, full, s, acts);
                 } else if self.update_dialog {
                     self.update_modal(ui, full, s);
@@ -449,6 +526,19 @@ mod tests {
             let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() };
             let _ = ctx.run(input, |ctx| app.update(ctx));
         }
+    }
+
+    #[test]
+    fn sensitive_keys_detected() {
+        use crate::keys::KeySpec;
+        let k = KeySpec::vk;
+        assert!(!sensitive_settings(&Settings::default()));
+        assert!(sensitive_combo(&[k(0x5B), k(0x41)]));
+        assert!(sensitive_combo(&[k(0x11), k(0x12), k(0x41)]));
+        assert!(!sensitive_combo(&[k(0x11), k(0x41)]));
+        let mut s = Settings::default();
+        s.pattern.steps = vec![Step::Press { key: k(0x5C), count: 1, gap: 0.0 }];
+        assert!(sensitive_settings(&s));
     }
 
     /// Fumée : chaque vue (spam, pattern, vue réduite, panneau Réglages, profils, confirmation)
@@ -481,7 +571,7 @@ mod tests {
                         }
                         app.settings_open = view == 2;
                         app.profiles_open = view == 3;
-                        app.confirm_clear = false;
+                        app.confirm = None;
                         app.update_dialog = false;
                         draw_frames(&mut app, &ctx, vec2(width_for(compact), height_for(mode, compact)), 3);
                     }

@@ -14,6 +14,9 @@ const GAP_SLACK_MS: f64 = 15.0;
 /// Évènement capturé : (instant, touche, enfoncée ?)
 pub type MacroEv = (Instant, KeySpec, bool);
 
+/// Plafond d'évènements gardés pendant une capture (au-delà : ignorés)
+pub const MAX_EVENTS: usize = 20_000;
+
 /// Capture en cours (distincte de `control::Recording`, qui sert aux raccourcis)
 #[derive(Clone, Debug)]
 pub struct MacroRec {
@@ -103,18 +106,20 @@ pub fn to_steps(events: &[MacroEv], end: Instant) -> (Vec<Step>, bool) {
         // rafale : appuis courts consécutifs de la même touche, écarts réguliers
         let mut j = i + 1;
         let mut gaps: Vec<f64> = vec![];
+        let mut sum = 0.0;
         while j < seq.len() {
             let b = &seq[j];
             if b.key.vk != a.key.vk || b.end - b.start >= HOLD_MS {
                 break;
             }
-            let mut g = gaps.clone();
-            g.push(b.start - seq[j - 1].end);
-            let mean = g.iter().sum::<f64>() / g.len() as f64;
-            if g.iter().any(|x| (x - mean).abs() > (mean * 0.5).max(GAP_SLACK_MS)) {
+            let gap = b.start - seq[j - 1].end;
+            let mean = (sum + gap) / (gaps.len() + 1) as f64;
+            let tol = (mean * 0.5).max(GAP_SLACK_MS);
+            if (gap - mean).abs() > tol || gaps.iter().any(|x| (x - mean).abs() > tol) {
                 break;
             }
-            gaps = g;
+            gaps.push(gap);
+            sum += gap;
             j += 1;
         }
         let mean = if gaps.is_empty() { 100.0 } else { (gaps.iter().sum::<f64>() / gaps.len() as f64).round() };
