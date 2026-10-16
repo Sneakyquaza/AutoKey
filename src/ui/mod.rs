@@ -63,6 +63,8 @@ pub struct App {
     /// Macro capturée en attente de confirmation de remplacement
     confirm_macro: Option<Vec<Step>>,
     profiles_open: bool,
+    /// Fenêtre de mise à jour (versions + nouveautés) ouverte
+    update_dialog: bool,
     /// Profil en cours de renommage (index, saisie)
     prof_rename: Option<(usize, String)>,
     /// Profil dont la suppression attend confirmation
@@ -88,6 +90,7 @@ impl App {
             settings_scroll: None,
             confirm_macro: None,
             profiles_open: false,
+            update_dialog: false,
             prof_rename: None,
             confirm_profile: None,
             prof_scroll: 0,
@@ -112,6 +115,11 @@ impl App {
     #[cfg(feature = "shots")]
     pub fn open_confirm_for_shots(&mut self, on: bool) {
         self.confirm_clear = on;
+    }
+
+    #[cfg(feature = "shots")]
+    pub fn open_update_for_shots(&mut self, on: bool) {
+        self.update_dialog = on;
     }
 
     #[cfg(feature = "shots")]
@@ -405,6 +413,7 @@ impl App {
             || self.confirm_reset
             || self.confirm_profile.is_some()
             || self.confirm_macro.is_some()
+            || self.update_dialog
         {
             let ctx = ui.ctx().clone();
             egui::Area::new(Id::new("overlay")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
@@ -420,6 +429,8 @@ impl App {
                 }
                 if self.confirm_clear || self.confirm_reset || self.confirm_profile.is_some() || self.confirm_macro.is_some() {
                     self.confirm_modal(ui, full, s, acts);
+                } else if self.update_dialog {
+                    self.update_modal(ui, full, s);
                 }
             });
         }
@@ -471,11 +482,27 @@ mod tests {
                         app.settings_open = view == 2;
                         app.profiles_open = view == 3;
                         app.confirm_clear = false;
+                        app.update_dialog = false;
                         draw_frames(&mut app, &ctx, vec2(width_for(compact), height_for(mode, compact)), 3);
                     }
                 }
             }
         }
+        // fenêtre de mise à jour (avec et sans notes)
+        for notes in [vec![], vec![("fr".to_string(), "Un".to_string()), ("en".to_string(), "One".to_string())]] {
+            *app.up.state.lock().unwrap() = crate::update::UpState::Available {
+                build: 58,
+                version: Some("3.4.1".into()),
+                notes,
+                exe_url: String::new(),
+                sha_url: String::new(),
+                sig_url: String::new(),
+            };
+            app.update_dialog = true;
+            draw_frames(&mut app, &ctx, vec2(width_for(false), height_for(Mode::Spam, false)), 3);
+        }
+        app.update_dialog = false;
+        *app.up.state.lock().unwrap() = crate::update::UpState::Idle;
         // capture de macro en cours et tâche en cours
         app.settings_open = false;
         app.profiles_open = false;

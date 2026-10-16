@@ -101,7 +101,8 @@ impl App {
             icon(p, Ic::Save, pos2(ur.min.x + 18.0, ur.center().y), 16.0, Color32::WHITE);
             text(p, pos2(ur.min.x + 32.0, ur.center().y), Align2::LEFT_CENTER, label, 13.0, W::S, Color32::WHITE);
             if resp.clicked() {
-                self.up.install();
+                self.close_popups();
+                self.update_dialog = true;
             }
         }
     }
@@ -378,6 +379,69 @@ impl App {
             }
             self.confirm_clear = false;
             self.confirm_reset = false;
+        }
+    }
+
+    /// Fenêtre « Mise à jour disponible » : versions, nouveautés dans la langue de l'UI, Plus tard / Mettre à jour
+    pub(super) fn update_modal(&mut self, ui: &mut Ui, full: Rect, s: &Settings) {
+        let lang = s.lang;
+        let crate::update::UpState::Available { build, version, notes, .. } = self.up.state() else {
+            self.update_dialog = false;
+            return;
+        };
+        let p = ui.painter().clone();
+        p.rect_filled(full, 0.0, Color32::from_black_alpha(150));
+        ui.interact(full, Id::new("modal_block"), Sense::click());
+        // notes dans la langue de l'UI, repli en anglais
+        let code = lang.code().to_lowercase();
+        let pick = |c: &str| notes.iter().filter(|(l, _)| l == c).map(|(_, t)| t.as_str()).collect::<Vec<_>>();
+        let mut lines = pick(&code);
+        if lines.is_empty() {
+            lines = pick("en");
+        }
+        let w = 400.0;
+        let tw = w - 36.0 - 14.0;
+        let galleys: Vec<_> = lines.iter().map(|t| p.layout(t.to_string(), font(13.0, W::R), TEXT, tw)).collect();
+        let notes_h: f32 = if galleys.is_empty() { 0.0 } else { 30.0 + galleys.iter().map(|g| g.size().y + 6.0).sum::<f32>() };
+        let h = 168.0 + notes_h;
+        let r = Rect::from_center_size(full.center(), vec2(w, h));
+        p.rect(r, 18.0, SURFACE, sk(1.0, LINE2));
+        icon(&p, Ic::Save, pos2(r.center().x, r.min.y + 36.0), 28.0, CYAN);
+        text(&p, pos2(r.center().x, r.min.y + 74.0), Align2::CENTER_CENTER, tr(lang, "upd_title"), 15.0, W::S, TEXT);
+        let cur = env!("CARGO_PKG_VERSION");
+        let ver = match &version {
+            Some(v) => format!("v{cur} → v{v}"),
+            None => format!("build {} → build {build}", crate::update::current_build()),
+        };
+        text(&p, pos2(r.center().x, r.min.y + 98.0), Align2::CENTER_CENTER, &ver, 13.0, W::R, MUTED);
+        if !galleys.is_empty() {
+            let mut y = r.min.y + 120.0;
+            spaced_text(&p, pos2(r.min.x + 18.0, y), tr(lang, "upd_news"), 11.0, MUTED);
+            y += 24.0;
+            for g in galleys {
+                let gh = g.size().y;
+                p.circle_filled(pos2(r.min.x + 24.0, y + 8.0), 2.5, VIOLET);
+                p.galley(pos2(r.min.x + 36.0, y), g, TEXT);
+                y += gh + 6.0;
+            }
+        }
+        let bw = 170.0;
+        let by = r.max.y - 22.0 - 36.0;
+        let later = Rect::from_min_size(pos2(r.center().x - bw - 6.0, by), vec2(bw, 36.0));
+        let upd = Rect::from_min_size(pos2(r.center().x + 6.0, by), vec2(bw, 36.0));
+        let rl = hand(ui.interact(later, Id::new("u_later"), Sense::click()));
+        let ru = hand(ui.interact(upd, Id::new("u_install"), Sense::click()));
+        p.rect(later, 10.0, SURFACE2, sk(1.0, if rl.hovered() { VIOLET } else { LINE2 }));
+        text(&p, later.center(), Align2::CENTER_CENTER, tr(lang, "upd_later"), 13.0, W::S, TEXT);
+        let hv = if ru.hovered() { 0.12 } else { 0.0 };
+        grad_rect(&p, upd, 10.0, lighten(VIOLET, hv), lighten(CYAN, hv), true);
+        text(&p, upd.center(), Align2::CENTER_CENTER, tr(lang, "update"), 13.0, W::S, Color32::WHITE);
+        if rl.clicked() {
+            self.update_dialog = false;
+        }
+        if ru.clicked() {
+            self.update_dialog = false;
+            self.up.install();
         }
     }
 

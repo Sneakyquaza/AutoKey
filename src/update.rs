@@ -25,10 +25,16 @@ const MAX_EXE: u64 = 64 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq)]
 pub enum UpState {
     Idle,
-    Available { build: u64, exe_url: String, sha_url: String, sig_url: String },
+    Available { build: u64, version: Option<String>, notes: Vec<(String, String)>, exe_url: String, sha_url: String, sig_url: String },
     Downloading(u8),
     Failed(&'static str),
     Restarting,
+}
+
+impl From<Release> for UpState {
+    fn from(r: Release) -> Self {
+        UpState::Available { build: r.build, version: r.version, notes: r.notes, exe_url: r.exe_url, sha_url: r.sha_url, sig_url: r.sig_url }
+    }
 }
 
 /// Résultat de la vérification manuelle (panneau Paramètres)
@@ -62,8 +68,47 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// Analyse la réponse JSON de /releases/latest. Renvoie (build, url exe, url sha, url signature) si plus récent.
-pub fn parse_release(json: &str, repo: &str, cur: u64) -> Option<(u64, String, String, String)> {
+/// Release plus récente trouvée sur GitHub
+#[derive(Clone, Debug, PartialEq)]
+pub struct Release {
+    pub build: u64,
+    /// Version affichable (« 3.4.1 »), lue dans le titre de la release ; None pour les anciennes
+    pub version: Option<String>,
+    /// Notes (code de langue « fr »/« en »/« pt », texte), max 6 par langue
+    pub notes: Vec<(String, String)>,
+    pub exe_url: String,
+    pub sha_url: String,
+    pub sig_url: String,
+}
+
+/// « AutoKey 3.4.1 (build 58) » → « 3.4.1 » (chiffres et points, 16 caractères max)
+fn parse_version(name: &str) -> Option<String> {
+    let w = name.strip_prefix("AutoKey ")?.split_whitespace().next()?;
+    let ok = !w.is_empty() && w.len() <= 16 && w.chars().all(|c| c.is_ascii_digit() || c == '.') && w.chars().any(|c| c.is_ascii_digit());
+    ok.then(|| w.to_string())
+}
+
+/// Lignes « - [fr] texte » du corps de la release (texte nettoyé, 140 caractères, 6 lignes par langue)
+fn parse_notes(body: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in body.lines() {
+        let Some(rest) = line.trim().strip_prefix("- [") else { continue };
+        let Some((code, txt)) = rest.split_once(']') else { continue };
+        if !matches!(code, "fr" | "en" | "pt") {
+            continue;
+        }
+        let clean: String = txt.chars().filter(|c| !c.is_control()).collect();
+        let clean: String = clean.trim().chars().take(140).collect();
+        if clean.is_empty() || out.iter().filter(|(c, _)| c == code).count() >= 6 {
+            continue;
+        }
+        out.push((code.to_string(), clean));
+    }
+    out
+}
+
+/// Analyse la réponse JSON de /releases/latest. Renvoie la release si elle est plus récente.
+pub fn parse_release(json: &str, repo: &str, cur: u64) -> Option<Release> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     if v.get("draft").and_then(|d| d.as_bool()) == Some(true) || v.get("prerelease").and_then(|d| d.as_bool()) == Some(true) {
         return None;
@@ -90,7 +135,9 @@ pub fn parse_release(json: &str, repo: &str, cur: u64) -> Option<(u64, String, S
             _ => {}
         }
     }
-    Some((build, exe?, sha?, sig?))
+    let version = v.get("name").and_then(|n| n.as_str()).and_then(parse_version);
+    let notes = v.get("body").and_then(|b| b.as_str()).map(parse_notes).unwrap_or_default();
+    Some(Release { build, version, notes, exe_url: exe?, sha_url: sha?, sig_url: sig? })
 }
 
 pub fn parse_sha(txt: &str) -> Option<[u8; 32]> {
@@ -155,8 +202,7 @@ impl Updater {
     }
 
     /// Interroge /releases/latest : `Some(..)` si une version plus récente existe
-    #[allow(clippy::type_complexity)]
-    fn fetch_latest(repo: &str) -> Result<Option<(u64, String, String, String)>, &'static str> {
+    fn fetch_latest(repo: &str) -> Result<Option<Release>, &'static str> {
         let url = format!("https://api.github.com/repos/{repo}/releases/latest");
         let resp = agent().get(&url).set("Accept", "application/vnd.github+json").call().map_err(|_| "up_net")?;
         let body = resp.into_string().map_err(|_| "up_net")?;
@@ -174,8 +220,8 @@ impl Updater {
             let (Some(repo), true, true) = (REPO, current_build() > 0, auto) else { return };
             loop {
                 if matches!(me.state(), UpState::Idle | UpState::Failed(_)) {
-                    if let Ok(Some((build, exe_url, sha_url, sig_url))) = Self::fetch_latest(repo) {
-                        me.set(UpState::Available { build, exe_url, sha_url, sig_url });
+                    if let Ok(Some(r)) = Self::fetch_latest(repo) {
+                        me.set(r.into());
                     }
                 }
                 std::thread::sleep(Duration::from_secs(6 * 3600));
@@ -199,8 +245,8 @@ impl Updater {
                 _ => Err("up_na"),
             };
             let c = match res {
-                Ok(Some((build, exe_url, sha_url, sig_url))) => {
-                    me.set(UpState::Available { build, exe_url, sha_url, sig_url });
+                Ok(Some(r)) => {
+                    me.set(r.into());
                     Check::Idle
                 }
                 Ok(None) => Check::UpToDate,
@@ -293,9 +339,11 @@ mod tests {
     #[test]
     fn newer_release_detected() {
         let r = parse_release(REL, "me/AutoKey", 42).unwrap();
-        assert_eq!(r.0, 57);
-        assert!(r.1.ends_with("/AutoKey.exe"));
-        assert!(r.3.ends_with("/AutoKey.exe.minisig"));
+        assert_eq!(r.build, 57);
+        assert!(r.exe_url.ends_with("/AutoKey.exe"));
+        assert!(r.sig_url.ends_with("/AutoKey.exe.minisig"));
+        assert_eq!(r.version, None);
+        assert!(r.notes.is_empty(), "body absent : pas de notes");
         assert!(parse_release(REL, "me/AutoKey", 57).is_none(), "même build : rien");
     }
 
@@ -380,5 +428,35 @@ mod tests {
         assert!(parse_sha("zz").is_none());
         let other = format!("SHA256 hash of x.zip:\r\n{}", "b".repeat(64));
         assert_eq!(parse_sha(&other).unwrap(), [0xbb; 32]);
+    }
+
+    #[test]
+    fn version_from_name() {
+        let with = |name: &str| REL.replace("\"draft\"", &format!("\"name\":\"{name}\",\"draft\""));
+        let ver = |name: &str| parse_release(&with(name), "me/AutoKey", 1).unwrap().version;
+        assert_eq!(ver("AutoKey 3.4.1 (build 58)").as_deref(), Some("3.4.1"));
+        assert_eq!(ver("AutoKey build 58"), None);
+        assert_eq!(ver("AutoKey 3.4.x (build 58)"), None);
+        assert_eq!(ver("AutoKey 1.2.3.4.5.6.7.8.9.10"), None);
+        assert_eq!(ver("Autre 3.4.1"), None);
+    }
+
+    #[test]
+    fn notes_by_language() {
+        let body = "- [fr] Un\\n- [en] One\\n- [pt] Um\\n\\nBuild n°1\\n- [de] Eins\\n- [fr]   \\n- [fr] Deux\\u0007";
+        let json = REL.replace("\"draft\"", &format!("\"body\":\"{body}\",\"draft\""));
+        let r = parse_release(&json, "me/AutoKey", 1).unwrap();
+        let fr: Vec<_> = r.notes.iter().filter(|(c, _)| c == "fr").map(|(_, t)| t.as_str()).collect();
+        assert_eq!(fr, ["Un", "Deux"], "ligne vide ignorée, contrôle supprimé");
+        assert_eq!(r.notes.len(), 4, "langue inconnue ignorée");
+        assert!(r.notes.contains(&("pt".to_string(), "Um".to_string())));
+    }
+
+    #[test]
+    fn notes_limits() {
+        let many: String = (0..9).map(|i| format!("- [en] n{i}\n")).collect();
+        assert_eq!(parse_notes(&many).len(), 6);
+        let long = format!("- [en] {}", "é".repeat(300));
+        assert_eq!(parse_notes(&long)[0].1.chars().count(), 140);
     }
 }

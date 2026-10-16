@@ -99,6 +99,8 @@ jobs:
     env:
       N: ${{ needs.build.outputs.build }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: AutoKey
@@ -128,5 +130,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          notes="Build n°$N (${GITHUB_REF_NAME}, commit ${GITHUB_SHA})."$'\n\n'"Vérifier l'empreinte : comparer avec AutoKey.exe.sha256."$'\n'"Vérifier la signature : minisign -Vm AutoKey.exe -P $MINISIGN_PUBKEY"$'\n'"Vérifier la provenance : gh attestation verify AutoKey.exe -R ${GITHUB_REPOSITORY}"
-          gh release create "build-$N" AutoKey.exe AutoKey.exe.sha256 AutoKey.exe.minisig --title "AutoKey build $N" --notes "$notes" --latest
+          # notes de la release : RELEASE_NOTES.md doit commencer par « # <version de Cargo.toml> »
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          first=$(head -n1 RELEASE_NOTES.md 2>/dev/null | tr -d '\r')
+          if [ "$first" != "# $version" ]; then
+            echo "::error::RELEASE_NOTES.md doit commencer par « # $version » (écrire les notes de cette version avant de publier)"
+            exit 1
+          fi
+          changelog=$(grep -E '^- \[(fr|en|pt)\] ' RELEASE_NOTES.md | tr -d '\r' || true)
+          notes="$changelog"$'\n\n'"Build n°$N (${GITHUB_REF_NAME}, commit ${GITHUB_SHA})."$'\n\n'"Vérifier l'empreinte : comparer avec AutoKey.exe.sha256."$'\n'"Vérifier la signature : minisign -Vm AutoKey.exe -P $MINISIGN_PUBKEY"$'\n'"Vérifier la provenance : gh attestation verify AutoKey.exe -R ${GITHUB_REPOSITORY}"
+          gh release create "build-$N" AutoKey.exe AutoKey.exe.sha256 AutoKey.exe.minisig --title "AutoKey $version (build $N)" --notes "$notes" --latest

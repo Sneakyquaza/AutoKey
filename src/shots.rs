@@ -12,7 +12,7 @@ pub struct Shots {
     waiting: bool,
 }
 
-const SCENES: [&str; 27] = [
+const SCENES: [&str; 28] = [
     "spam_fr",
     "spam_rec_en",
     "pattern_empty",
@@ -23,6 +23,7 @@ const SCENES: [&str; 27] = [
     "modal",
     "update",
     "update_dl",
+    "update_dialog",
     "settings_fr",
     "settings_fr_bottom",
     "settings_tip_fr",
@@ -51,7 +52,32 @@ pub fn init(app: &mut App) {
 fn setup(app: &App, ctx: &egui::Context, name: &str) {
     use crate::update::UpState;
     *app.updater().state.lock().unwrap() = match name {
-        "update" => UpState::Available { build: 58, exe_url: String::new(), sha_url: String::new(), sig_url: String::new() },
+        "update" => UpState::Available {
+            build: 58,
+            version: Some("3.4.1".into()),
+            notes: vec![],
+            exe_url: String::new(),
+            sha_url: String::new(),
+            sig_url: String::new(),
+        },
+        "update_dialog" => UpState::Available {
+            build: 58,
+            version: Some("3.4.1".into()),
+            notes: [
+                ("fr", "Une fenêtre détaille les nouveautés avant la mise à jour"),
+                ("fr", "Correction de la position de la fenêtre sur plusieurs écrans"),
+                ("fr", "Plusieurs petites améliorations"),
+                ("en", "A dialog now lists what's new before updating"),
+                ("en", "Fixed the window position on multi-monitor setups"),
+                ("pt", "Uma janela mostra as novidades antes de atualizar"),
+            ]
+            .into_iter()
+            .map(|(c, t)| (c.to_string(), t.to_string()))
+            .collect(),
+            exe_url: String::new(),
+            sha_url: String::new(),
+            sig_url: String::new(),
+        },
         "update_dl" => UpState::Downloading(42),
         _ => UpState::Idle,
     };
@@ -107,7 +133,7 @@ fn setup(app: &App, ctx: &egui::Context, name: &str) {
             std::thread::sleep(std::time::Duration::from_millis(3200));
             s = sh.settings.lock().unwrap();
         }
-        "update" | "update_dl" => s.mode = Mode::Spam,
+        "update" | "update_dl" | "update_dialog" => s.mode = Mode::Spam,
         "settings_fr" | "settings_fr_bottom" | "settings_tip_fr" => s.mode = Mode::Spam,
         "settings_compact_en" | "settings_compact_en_bottom" => {
             s.mode = Mode::Spam;
@@ -218,6 +244,7 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     if !st.waiting {
         if st.frame == 0 {
             app.open_confirm_for_shots(false);
+            app.open_update_for_shots(false);
             app.open_settings_for_shots(false);
             app.open_profiles_for_shots(false);
             app.force_tip_for_shots(ctx, None);
@@ -248,6 +275,9 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         }
         if SCENES[st.scene].starts_with("profiles") && st.frame == 1 {
             app.open_profiles_for_shots(true);
+        }
+        if SCENES[st.scene] == "update_dialog" && st.frame == 1 {
+            app.open_update_for_shots(true);
         }
         if SCENES[st.scene] == "modal" && st.frame == 1 {
             app.open_confirm_for_shots(true);
