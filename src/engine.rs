@@ -433,14 +433,15 @@ pub mod tests {
     fn press_flood_stops_fast() {
         let log = Arc::new(Log::default());
         let r = Runner::new(log.clone());
-        r.start(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 100_000, 0.0, 0.0)], loops: 1, jitter: 0.0 });
+        // boucle infinie : le pattern tourne encore au moment de l'arrêt, quelle que soit la vitesse de la machine
+        r.start(Job::Pattern { steps: vec![CStep::Press(KeySpec::letter('e'), 100_000, 0.0, 0.0)], loops: 0, jitter: 0.0 });
         sleep(20);
+        assert!(r.running());
         let t = Instant::now();
         r.stop();
         assert!(t.elapsed() < Duration::from_millis(500));
         assert!(!r.running());
         let n = log.0.lock().unwrap().len();
-        assert!(n < 200_000, "n = {n}");
         sleep(20);
         assert_eq!(log.0.lock().unwrap().len(), n, "plus aucune frappe après stop");
     }
