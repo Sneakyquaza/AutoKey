@@ -50,7 +50,7 @@ public static class SmokeWin
 
     public const uint WM_CLOSE = 0x0010;
 
-    // Fenêtres de haut niveau du processus `pid` (cls / title : null = pas de filtre ; title = égalité exacte).
+    // Fenêtres de haut niveau du processus `pid` (cls / title : vide = pas de filtre — PowerShell passe $null en "" ; title = égalité exacte).
     public static IntPtr[] Find(uint pid, string cls, string title, bool visibleOnly)
     {
         List<IntPtr> res = new List<IntPtr>();
@@ -60,13 +60,13 @@ public static class SmokeWin
             GetWindowThreadProcessId(h, out p);
             if (p != pid) return true;
             if (visibleOnly && !IsWindowVisible(h)) return true;
-            if (cls != null)
+            if (!string.IsNullOrEmpty(cls))
             {
                 StringBuilder c = new StringBuilder(256);
                 GetClassName(h, c, 256);
                 if (c.ToString() != cls) return true;
             }
-            if (title != null)
+            if (!string.IsNullOrEmpty(title))
             {
                 StringBuilder t = new StringBuilder(256);
                 GetWindowText(h, t, 256);
